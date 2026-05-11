@@ -1,0 +1,54 @@
+# OS/editor noise
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+
+# Terraform local cache and runtime artifacts
+**/.terraform/*
+*.tfstate
+*.tfstate.*
+.terraform.tfstate.lock.info
+tfplan
+*.tfplan
+*.tfplan.*
+crash.log
+crash.*.log
+override.tf
+override.tf.json
+*_override.tf
+*_override.tf.json
+
+# Keep provider dependency lock files in source control
+!**/.terraform.lock.hcl
+
+# Variable files often contain secrets
+*.tfvars
+*.tfvars.json
+*.auto.tfvars
+*.auto.tfvars.json
+*.pkrvars.hcl
+*.tfvars.hcl
+
+# Allow checked-in safe examples
+!*.example.tfvars
+!*.example.tfvars.json
+!*.example.tfvars.hcl
+
+# Common secret files
+.env
+.env.*
+*.pem
+*.pfx
+*.key
+*.cer
+
+# Optional local override patterns
+*.local.tfvars
+*.local.tfvars.json
+
+# working directory
+working/
+
+# Ignore any Copilot Instructions files
+.github/instructions/*
