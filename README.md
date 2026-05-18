@@ -15,12 +15,12 @@ for CycleCloud to manage compute resources in the same subscription.
 | [terraform/main.tf](terraform/main.tf) | Resource group, naming pet, `azuread_user` / `azurerm_subscription` data |
 | [terraform/network.tf](terraform/network.tf) | VNet `10.150.0.0/16`, four subnets via `for_each` over `local.subnets` |
 | [terraform/natgateway.tf](terraform/natgateway.tf) | NAT Gateway + public IP, attached to the `cluster` and `server` subnets |
-| [terraform/bastion.tf](terraform/bastion.tf) | Standard SKU Bastion with tunneling enabled |
+| [terraform/bastion.tf](terraform/bastion.tf) | Standard SKU Bastion with tunneling enabled (only when `access_mode = "bastion"`) |
 | [terraform/keyvault.tf](terraform/keyvault.tf) | RBAC-mode Key Vault holding an ephemeral ED25519 SSH key pair (write-only secrets) |
 | [terraform/ssh.tf](terraform/ssh.tf) | `ephemeral.tls_private_key` / `tls_public_key` providers |
 | [terraform/monitoring.tf](terraform/monitoring.tf) | Log Analytics workspace, linked storage account (private-only), `azurerm_log_analytics_linked_storage_account` |
 | [terraform/private_endpoints.tf](terraform/private_endpoints.tf) | Private DNS zones, VNet links, AMPLS scope + scoped service, PEs for Key Vault, storage (blob + table), AMPLS |
-| [terraform/cyclecloud.tf](terraform/cyclecloud.tf) | Ubuntu 24.04 managed OS disk built `FromImage`, NIC in `server` subnet, VM with `SystemAssigned + UserAssigned` identity, cloud-init from `scripts/cloud-config.yaml` |
+| [terraform/cyclecloud.tf](terraform/cyclecloud.tf) | Ubuntu 24.04 managed OS disk built `FromImage`, NIC in `server` subnet, VM with `SystemAssigned + UserAssigned` identity, cloud-init from `scripts/cloud-config.yaml`; optional public IP + NSG on the NIC when `access_mode = "public_ip"` |
 | [terraform/roles.tf](terraform/roles.tf) | Custom **CycleCloud Orchestrator Role**, role assignment to the VM's system identity at subscription scope, Key Vault Administrator for caller, monitoring data-plane roles for the LA workspace |
 | [terraform/locals.tf](terraform/locals.tf) | Subnet CIDR math via `cidrsubnet`, tag merging, DNS zone catalogs |
 | [terraform/outputs.tf](terraform/outputs.tf) | Resource group, VM name/IP, Bastion name, Key Vault URI, etc. |
@@ -35,7 +35,7 @@ for CycleCloud to manage compute resources in the same subscription.
 | `cluster` | `10.150.0.0/23` | CycleCloud-managed compute nodes |
 | `private_endpoint` | `10.150.2.0/26` | All `azurerm_private_endpoint` NICs |
 | `server` | `10.150.2.64/26` | CycleCloud server VM NIC |
-| `AzureBastionSubnet` | `10.150.2.128/26` | Bastion (name is required by Azure) |
+| `AzureBastionSubnet` | `10.150.2.128/26` | Bastion (name is required by Azure; only created when `access_mode = "bastion"`) |
 
 ## Prerequisites
 
@@ -70,8 +70,15 @@ need to reach the server.
 
 ### Connecting to the CycleCloud server
 
-The VM has no public IP. Use Bastion + Azure CLI tunneling (the Bastion is
-Standard SKU with `tunneling_enabled = true`):
+The connectivity model is controlled by `var.access_mode`:
+
+- `bastion` (default) — VM has no public IP; reach it via Azure Bastion tunneling.
+- `public_ip` — VM gets a Standard public IP and an NSG allowing 22/443 inbound
+  from `var.CURRENT_IP_ADDRESS` only. Bastion is not deployed.
+
+#### Option A: Bastion (`access_mode = "bastion"`)
+
+Use Bastion + Azure CLI tunneling (Standard SKU, `tunneling_enabled = true`):
 
 ```bash
 RG=$(terraform output -raw resource_group_name)
@@ -86,8 +93,26 @@ az network bastion tunnel \
 ```
 
 Then browse to <http://localhost:8443> and complete the CycleCloud setup
-wizard (site name, admin account, SSH public key). The generated SSH private
-key is in Key Vault under the secret name from
+wizard (site name, admin account, SSH public key).
+
+#### Option B: Public IP (`access_mode = "public_ip"`)
+
+The VM gets a Standard public IP; NSG rules restrict inbound to your
+`CURRENT_IP_ADDRESS`:
+
+```bash
+IP=$(terraform output -raw cyclecloud_vm_public_ip)
+
+# Web UI (CycleCloud serves HTTPS on 443 after setup)
+open https://$IP/
+
+# SSH using the key from Key Vault (see below)
+ssh -i ~/.ssh/cyclecloud.pem "$(terraform output -raw cyclecloud_vm_admin_username)@$IP"
+```
+
+#### SSH private key (both modes)
+
+The generated SSH private key is in Key Vault under the secret name from
 `terraform output ssh_private_key_secret_name`:
 
 ```bash
@@ -107,8 +132,9 @@ Declared in [terraform/variables.tf](terraform/variables.tf):
 | `location` | string | `southcentralus` | Azure region for all resources |
 | `vm_admin_username` | string | `cyclecloudadmin` | Admin user on the CycleCloud VM |
 | `vnet_address_space` | list(string) | `["10.150.0.0/16"]` | VNet space; `locals.tf` carves subnets from `[0]` |
+| `access_mode` | string | `bastion` | `bastion` deploys Azure Bastion (no public IP on VM). `public_ip` attaches a Standard public IP + NSG to the VM NIC, allowing 22/443 inbound from `CURRENT_IP_ADDRESS` only; no Bastion or `AzureBastionSubnet` is deployed |
 | `tags` | map(string) | see file | Merged with a `deployed_by` tag |
-| `CURRENT_IP_ADDRESS` | string | `""` | Caller's public IPv4 (or `x.x.x.x/32`). Must be a real value at apply time — used in the Key Vault firewall allow list |
+| `CURRENT_IP_ADDRESS` | string | `""` | Caller's public IPv4 (or `x.x.x.x/32`). Used in the Key Vault firewall allow list and, when `access_mode = "public_ip"`, as the source for the VM NSG inbound rules. Must be a real value at apply time |
 
 `ARM_SUBSCRIPTION_ID`, `ARM_CLIENT_ID`, `ARM_CLIENT_SECRET`, `ARM_TENANT_ID`
 in `environments/example.tfvars.hcl` are read by the `azurerm` provider as
@@ -132,8 +158,9 @@ tunnel (above) and complete:
 These are real but were intentionally left out of this round of changes — pick
 them up as needed:
 
-- **No NSGs.** The Bastion subnet in particular should have an NSG with the
-  required allow rules in any non-lab use.
+- **No NSGs (bastion mode).** The Bastion subnet and server subnet have no
+  NSGs in `bastion` mode. The `public_ip` mode does attach an NSG to the VM
+  NIC, but only with allow rules for the caller IP — no deny-all baseline.
 - **`azurerm_user_assigned_identity.cyclecloud`** is attached to the VM but
   has no role assignments of its own. It's reserved for future cluster nodes
   / CycleCloud account configuration.

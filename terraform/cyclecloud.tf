@@ -18,6 +18,54 @@ data "azurerm_platform_image" "ubuntu" {
   sku       = "server"
 }
 
+resource "azurerm_public_ip" "cyclecloud" {
+  count               = local.use_public_ip ? 1 : 0
+  allocation_method   = "Static"
+  location            = var.location
+  name                = "pip-${random_pet.naming.id}-cc"
+  resource_group_name = azurerm_resource_group.testing.name
+  sku                 = "Standard"
+  tags                = local.common_tags
+}
+
+resource "azurerm_network_security_group" "cyclecloud" {
+  count               = local.use_public_ip ? 1 : 0
+  location            = var.location
+  name                = "nsg-${random_pet.naming.id}-cc"
+  resource_group_name = azurerm_resource_group.testing.name
+  tags                = local.common_tags
+
+  security_rule {
+    name                       = "allow-ssh-from-caller"
+    priority                   = 100
+    direction                  = "Inbound"
+    access                     = "Allow"
+    protocol                   = "Tcp"
+    source_port_range          = "*"
+    destination_port_range     = "22"
+    source_address_prefix      = local.configured_current_ip_address
+    destination_address_prefix = "*"
+  }
+
+  security_rule {
+    name                       = "allow-https-from-caller"
+    priority                   = 110
+    direction                  = "Inbound"
+    access                     = "Allow"
+    protocol                   = "Tcp"
+    source_port_range          = "*"
+    destination_port_range     = "443"
+    source_address_prefix      = local.configured_current_ip_address
+    destination_address_prefix = "*"
+  }
+}
+
+resource "azurerm_network_interface_security_group_association" "cyclecloud" {
+  count                     = local.use_public_ip ? 1 : 0
+  network_interface_id      = azurerm_network_interface.cyclecloud.id
+  network_security_group_id = azurerm_network_security_group.cyclecloud[0].id
+}
+
 resource "azurerm_network_interface" "cyclecloud" {
   location            = var.location
   name                = "nic-cc-${random_pet.naming.id}"
@@ -28,6 +76,7 @@ resource "azurerm_network_interface" "cyclecloud" {
     name                          = "ipconfig-cc-${random_pet.naming.id}"
     private_ip_address_allocation = "Dynamic"
     subnet_id                     = azurerm_subnet.cyclecloud["server"].id
+    public_ip_address_id          = local.use_public_ip ? azurerm_public_ip.cyclecloud[0].id : null
   }
 }
 

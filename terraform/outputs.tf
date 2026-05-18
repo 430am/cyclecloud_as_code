@@ -18,14 +18,24 @@ output "cyclecloud_vm_private_ip" {
   value       = azurerm_network_interface.cyclecloud.private_ip_address
 }
 
+output "cyclecloud_vm_public_ip" {
+  description = "Public IP of the CycleCloud server VM (null when access_mode = \"bastion\")."
+  value       = local.use_public_ip ? azurerm_public_ip.cyclecloud[0].ip_address : null
+}
+
 output "cyclecloud_vm_admin_username" {
   description = "Admin username for SSH into the CycleCloud server VM."
   value       = var.vm_admin_username
 }
 
+output "access_mode" {
+  description = "Active connectivity mode for the CycleCloud server (\"bastion\" or \"public_ip\")."
+  value       = var.access_mode
+}
+
 output "bastion_host_name" {
-  description = "Name of the Azure Bastion host (use with `az network bastion ssh`)."
-  value       = azurerm_bastion_host.bastion.name
+  description = "Name of the Azure Bastion host (null when access_mode = \"public_ip\")."
+  value       = local.use_bastion ? azurerm_bastion_host.bastion[0].name : null
 }
 
 output "key_vault_name" {

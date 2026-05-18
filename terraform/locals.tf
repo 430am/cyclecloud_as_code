@@ -1,6 +1,9 @@
 locals {
   configured_current_ip_address = trimspace(var.CURRENT_IP_ADDRESS)
 
+  use_bastion   = var.access_mode == "bastion"
+  use_public_ip = var.access_mode == "public_ip"
+
   common_tags = merge(var.tags, {
     deployed_by = data.azuread_user.current_user.display_name
   })
@@ -31,10 +34,12 @@ locals {
   server_subnet           = cidrsubnet(local.base_cidr, 10, 9)  # /26 - 10.150.2.64/26
   bastion_subnet          = cidrsubnet(local.base_cidr, 10, 10) # /26 - 10.150.2.128/26
 
-  subnets = {
-    cluster            = local.cluster_subnet
-    private_endpoint   = local.private_endpoint_subnet
-    server             = local.server_subnet
-    AzureBastionSubnet = local.bastion_subnet
-  }
+  subnets = merge(
+    {
+      cluster          = local.cluster_subnet
+      private_endpoint = local.private_endpoint_subnet
+      server           = local.server_subnet
+    },
+    local.use_bastion ? { AzureBastionSubnet = local.bastion_subnet } : {}
+  )
 }

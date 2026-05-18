@@ -31,3 +31,20 @@ variable "vnet_address_space" {
   type        = list(string)
   default     = ["10.150.0.0/16"]
 }
+
+variable "access_mode" {
+  description = <<-EOT
+    How to reach the CycleCloud server VM:
+      - "bastion"   : deploy Azure Bastion (Standard, tunneling enabled); VM has no public IP.
+      - "public_ip" : attach a Standard public IP to the VM NIC and create an NSG that
+                      allows SSH (22) and HTTPS (443) inbound from var.CURRENT_IP_ADDRESS only.
+                      No Bastion / AzureBastionSubnet is deployed.
+  EOT
+  type        = string
+  default     = "bastion"
+
+  validation {
+    condition     = contains(["bastion", "public_ip"], var.access_mode)
+    error_message = "access_mode must be either \"bastion\" or \"public_ip\"."
+  }
+}
