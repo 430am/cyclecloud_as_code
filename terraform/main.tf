@@ -7,12 +7,12 @@ data "azurerm_client_config" "current" {}
 data "azurerm_subscription" "current" {}
 
 resource "random_pet" "naming" {
-    length = 2
-    separator = ""
+  length    = 2
+  separator = ""
 }
 
 resource "azurerm_resource_group" "testing" {
-    name     = "rg-${random_pet.naming.id}"
-    location = var.location
+  name     = "rg-${random_pet.naming.id}"
+  location = var.location
 }
 

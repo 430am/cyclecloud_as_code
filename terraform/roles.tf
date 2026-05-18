@@ -1,9 +1,9 @@
 resource "azurerm_role_definition" "cyclecloud" {
-    name = "CycleCloud Orchestrator Role"
-    scope = data.azurerm_subscription.current.id
-    description = "Role for managing CycleCloud orchestrator resources."
+  name        = "CycleCloud Orchestrator Role"
+  scope       = data.azurerm_subscription.current.id
+  description = "Role for managing CycleCloud orchestrator resources."
 
-    assignable_scopes = [ data.azurerm_subscription.current.id ]
+  assignable_scopes = [data.azurerm_subscription.current.id]
 
   permissions {
     actions = [
@@ -73,33 +73,33 @@ resource "azurerm_role_definition" "cyclecloud" {
 }
 
 resource "azurerm_user_assigned_identity" "cyclecloud" {
-    location = var.location
-    name = "uaid-${random_pet.naming.id}"
-    resource_group_name = azurerm_resource_group.testing.name
-    tags = local.common_tags
+  location            = var.location
+  name                = "uaid-${random_pet.naming.id}"
+  resource_group_name = azurerm_resource_group.testing.name
+  tags                = local.common_tags
 }
 
 resource "azurerm_role_assignment" "cyclecloud" {
-    principal_id         = azurerm_linux_virtual_machine.cyclecloud.identity[0].principal_id
-    scope                = data.azurerm_subscription.current.id
-    role_definition_name = azurerm_role_definition.cyclecloud.name
-    depends_on           = [ azurerm_role_definition.cyclecloud ]
+  principal_id         = azurerm_linux_virtual_machine.cyclecloud.identity[0].principal_id
+  scope                = data.azurerm_subscription.current.id
+  role_definition_name = azurerm_role_definition.cyclecloud.name
+  depends_on           = [azurerm_role_definition.cyclecloud]
 }
 
 resource "azurerm_role_assignment" "key_vault" {
-  depends_on = [ azurerm_key_vault.cyclecloud ]
-  
-  principal_id = data.azurerm_client_config.current.object_id
-  scope = azurerm_key_vault.cyclecloud.id
+  depends_on = [azurerm_key_vault.cyclecloud]
+
+  principal_id         = data.azurerm_client_config.current.object_id
+  scope                = azurerm_key_vault.cyclecloud.id
   role_definition_name = "Key Vault Administrator"
 }
 
 resource "azurerm_role_assignment" "monitoring" {
   for_each = toset(["Storage Blob Data Contributor", "Storage Table Data Contributor"])
-  
-  principal_id = azurerm_log_analytics_workspace.monitoring.identity[0].principal_id
+
+  principal_id         = azurerm_log_analytics_workspace.monitoring.identity[0].principal_id
   role_definition_name = each.key
-  scope = azurerm_storage_account.monitoring.id
-  
-  depends_on = [ azurerm_log_analytics_workspace.monitoring, azurerm_storage_account.monitoring ]
+  scope                = azurerm_storage_account.monitoring.id
+
+  depends_on = [azurerm_log_analytics_workspace.monitoring, azurerm_storage_account.monitoring]
 }

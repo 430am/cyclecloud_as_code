@@ -19,7 +19,7 @@ variable "CURRENT_IP_ADDRESS" {
 variable "tags" {
   description = "A map of tags to apply to all resources."
   type        = map(string)
-  default     = {
+  default = {
     managed_by = "terraform"
     project    = "cyclecloud testing"
     workload   = "Azure CycleCloud"

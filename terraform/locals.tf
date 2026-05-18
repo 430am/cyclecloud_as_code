@@ -4,7 +4,7 @@ locals {
   common_tags = merge(var.tags, {
     deployed_by = data.azuread_user.current_user.display_name
   })
-  
+
   private_dns_names = [
     "privatelink.blob.core.windows.net",
     "privatelink.file.core.windows.net",
@@ -25,16 +25,16 @@ locals {
     "privatelink.table.core.windows.net"
   ]
 
-  base_cidr = var.vnet_address_space[0]
-  cluster_subnet = cidrsubnet(local.base_cidr, 7, 0) # /23 - 10.150.0.0/23
-  private_endpoint_subnet = cidrsubnet(local.base_cidr, 10, 8) # /26 - 10.150.2.0/26
-  server_subnet = cidrsubnet(local.base_cidr, 10, 9) # /26 - 10.150.2.64/26
-  bastion_subnet = cidrsubnet(local.base_cidr, 10, 10) # /26 - 10.150.2.128/26
+  base_cidr               = var.vnet_address_space[0]
+  cluster_subnet          = cidrsubnet(local.base_cidr, 7, 0)   # /23 - 10.150.0.0/23
+  private_endpoint_subnet = cidrsubnet(local.base_cidr, 10, 8)  # /26 - 10.150.2.0/26
+  server_subnet           = cidrsubnet(local.base_cidr, 10, 9)  # /26 - 10.150.2.64/26
+  bastion_subnet          = cidrsubnet(local.base_cidr, 10, 10) # /26 - 10.150.2.128/26
 
   subnets = {
-    cluster           = local.cluster_subnet
-    private_endpoint  = local.private_endpoint_subnet
-    server            = local.server_subnet
+    cluster            = local.cluster_subnet
+    private_endpoint   = local.private_endpoint_subnet
+    server             = local.server_subnet
     AzureBastionSubnet = local.bastion_subnet
   }
 }
