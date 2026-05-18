@@ -10,6 +10,10 @@ terraform {
         source = "hashicorp/azurerm"
         version = "~> 4"
     }
+    cloudinit = {
+        source = "hashicorp/cloudinit"
+        version = "~> 2"
+    }
     random = {
         source = "hashicorp/random"
         version = "~> 3"
@@ -30,15 +34,6 @@ provider "azuread" {
 }
 
 provider "azurerm" {
-    alias = "hub_subscription"
-    subscription_id = var.hub_subscription_id
-    storage_use_azuread = true
-    features {}
-}
-
-provider "azurerm" {
-    alias = "workload_subscription"
-    subscription_id = var.workload_subscription_id
     storage_use_azuread = true
     features {}
 }
