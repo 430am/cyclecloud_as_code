@@ -1,4 +1,4 @@
-# cyclecloud_testing
+# cyclecloud_as_code
 
 Terraform that stands up an isolated **Azure CycleCloud** test bench: a hardened
 single-VM CycleCloud server (Ubuntu 24.04) with a supporting VNet, Bastion,
@@ -149,8 +149,8 @@ to `var.current_ip_address`:
 ```bash
 IP=$(terraform output -raw cyclecloud_vm_public_ip)
 
-# Web UI (CycleCloud serves HTTPS on 443 after setup)
-open https://$IP/
+# Web UI (CycleCloud serves HTTPS on 8080 after setup)
+open https://$IP:8080/
 
 # SSH using the key from Key Vault (see below)
 ssh -i ~/.ssh/cyclecloud.pem "$(terraform output -raw cyclecloud_vm_admin_username)@$IP"
