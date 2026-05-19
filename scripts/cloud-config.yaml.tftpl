@@ -105,8 +105,14 @@ runcmd:
   # IMPORTANT: cloud-init runs each `runcmd` item in its own shell, so shell
   # variables (e.g. CCPASSWORD assigned via $(az keyvault secret show ...))
   # do not persist between items.
+  #
+  # Also: cloud-init concatenates all runcmd items into a single script that
+  # is executed by /bin/sh (dash on Ubuntu), not bash. Bash-only options
+  # like `set -o pipefail` would error out with `Illegal option -o pipefail`,
+  # so stick to POSIX-portable shell here. There are no pipelines in this
+  # block today, so `set -eu` is sufficient.
   - |
-    set -euo pipefail
+    set -eu
 
     # Authenticate the VM's managed identity to ARM, then pull the admin
     # password + SSH public key from Key Vault. The KV firewall denies public

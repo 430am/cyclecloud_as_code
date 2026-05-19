@@ -38,13 +38,37 @@ resource "azurerm_network_security_group" "cyclecloud" {
   tags                = local.common_tags
 
   security_rule {
-    name                       = "allow-inbound-from-caller"
+    name                       = "allow-ssh-from-caller"
     priority                   = 100
     direction                  = "Inbound"
     access                     = "Allow"
     protocol                   = "Tcp"
     source_port_range          = "*"
-    destination_port_ranges    = ["22", "443", "8080"]
+    destination_port_range     = "22"
+    source_address_prefix      = local.configured_current_ip_address
+    destination_address_prefix = "*"
+  }
+
+  security_rule {
+    name                       = "allow-https-from-caller"
+    priority                   = 110
+    direction                  = "Inbound"
+    access                     = "Allow"
+    protocol                   = "Tcp"
+    source_port_range          = "*"
+    destination_port_range     = "443"
+    source_address_prefix      = local.configured_current_ip_address
+    destination_address_prefix = "*"
+  }
+
+  security_rule {
+    name                       = "allow-8080-from-caller"
+    priority                   = 120
+    direction                  = "Inbound"
+    access                     = "Allow"
+    protocol                   = "Tcp"
+    source_port_range          = "*"
+    destination_port_range     = "8080"
     source_address_prefix      = local.configured_current_ip_address
     destination_address_prefix = "*"
   }
@@ -149,6 +173,11 @@ resource "azurerm_linux_virtual_machine" "cyclecloud" {
     public_key = trimspace(data.azurerm_key_vault_secret.public_key.value)
     username   = var.vm_admin_username
   }
+
+  # Use the Azure-managed boot diagnostics storage account (no
+  # storage_account_uri set) so serial console + screenshot are available in
+  # the portal without provisioning / paying for a dedicated SA.
+  boot_diagnostics {}
 
   # SystemAssigned provides the principal we grant the orchestrator role to.
   # The UAI is also attached so it's available for future cluster nodes /
