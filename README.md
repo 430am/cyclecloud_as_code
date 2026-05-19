@@ -122,7 +122,7 @@ flowchart LR
 
     %% Operator access paths
     operator -- "HTTPS 443<br/>(Bastion mode)" -.-> pipBas -.-> bastion
-    bastion -.->|"SSH 22 /<br/>HTTPS tunnel"| vm
+    bastion -. "SSH 22 /<br/>HTTPS tunnel" .-> vm
     operator == "SSH 22 / HTTPS 443 / 8080<br/>(public_ip mode)" ==> pipVm
     pipVm === nsgNic === nic
 
