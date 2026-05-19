@@ -1,8 +1,9 @@
 # Terraform tests
 
 Plan-only tests for the deterministic logic in this module. They run in
-seconds, need no Azure credentials, and execute on every PR via the
-[ci.yml](../../.github/workflows/ci.yml) workflow.
+seconds and need no Azure credentials. A CI workflow that runs them on
+every PR is planned but not yet wired up -- for now they're a local
+gate, invoked from `terraform/` with `terraform test`.
 
 ## Running locally
 

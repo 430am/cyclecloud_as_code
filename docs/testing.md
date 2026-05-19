@@ -8,17 +8,18 @@ the expensive ones are reserved for real deploys.
 
 ## Tier 1 - static checks (seconds, no Azure)
 
-Run on every push / PR by
-[.github/workflows/ci.yml](../.github/workflows/ci.yml):
+Run locally via [pre-commit](https://pre-commit.com/) (a GitHub Actions
+workflow that runs the same gates on every PR is planned but not yet
+wired up):
 
 | Check | Catches |
 |---|---|
 | `terraform fmt -check -recursive` | style drift |
 | `terraform validate` | HCL + provider schema errors |
 | [`tflint`](https://github.com/terraform-linters/tflint) (config in [.tflint.hcl](../.tflint.hcl)) | unused vars, deprecated args, invalid Azure SKUs, naming-convention violations, missing descriptions |
-| [`trivy config`](https://trivy.dev/) | security misconfig (public storage, weak TLS, etc.). **Advisory only today** -- accepted findings will move to `.trivyignore` and the workflow will flip `exit-code: "1"` |
+| [`trivy config`](https://trivy.dev/) | security misconfig (public storage, weak TLS, etc.). Advisory only today -- accepted findings will move to `.trivyignore` once CI lands |
 
-Locally, the same gates run via [pre-commit](https://pre-commit.com/):
+First-time setup and full-repo run:
 
 ```bash
 pip install pre-commit
@@ -45,8 +46,8 @@ invariant, NSG rule surface, cloud-init render, etc.).
 
 ## Tier 3 - end-to-end apply (minutes, real Azure, on demand)
 
-Not yet implemented. Planned as a separate `workflow_dispatch` GitHub
-Actions workflow wired to a dedicated scratch subscription via OIDC
-federation, with one job per `access_mode` and an unconditional
-`terraform destroy` in cleanup. Track this under
-[known-gaps.md](known-gaps.md) if you start the work.
+Not yet implemented. Planned as a `workflow_dispatch` GitHub Actions
+workflow wired to a dedicated scratch subscription via OIDC federation,
+with one job per `access_mode` and an unconditional `terraform destroy`
+in cleanup. Track this under [known-gaps.md](known-gaps.md) if you
+start the work.
