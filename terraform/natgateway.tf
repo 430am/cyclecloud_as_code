@@ -1,7 +1,7 @@
 resource "azurerm_public_ip" "nat_gateway" {
   allocation_method   = "Static"
   location            = var.location
-  name                = "pip-${random_pet.naming.id}-nat"
+  name                = "${local.naming_token}-pip-nat"
   resource_group_name = azurerm_resource_group.testing.name
   sku                 = "Standard"
   tags                = local.common_tags
@@ -9,7 +9,7 @@ resource "azurerm_public_ip" "nat_gateway" {
 
 resource "azurerm_nat_gateway" "nat_gateway" {
   location            = var.location
-  name                = "nat-${random_pet.naming.id}"
+  name                = "${local.naming_token}-nat"
   resource_group_name = azurerm_resource_group.testing.name
   sku_name            = "Standard"
   tags                = local.common_tags

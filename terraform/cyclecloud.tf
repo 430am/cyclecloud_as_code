@@ -9,20 +9,11 @@ data "cloudinit_config" "cyclecloud" {
   }
 }
 
-# Latest versioned ID for the Ubuntu 24.04 LTS marketplace image. Required for
-# azurerm_managed_disk.create_option = "FromImage".
-data "azurerm_platform_image" "ubuntu" {
-  location  = var.location
-  publisher = "Canonical"
-  offer     = "ubuntu-24_04-lts"
-  sku       = "server"
-}
-
 resource "azurerm_public_ip" "cyclecloud" {
   count               = local.use_public_ip ? 1 : 0
   allocation_method   = "Static"
   location            = var.location
-  name                = "pip-${random_pet.naming.id}-cc"
+  name                = "${local.naming_token}-pip-cc"
   resource_group_name = azurerm_resource_group.testing.name
   sku                 = "Standard"
   tags                = local.common_tags
@@ -31,7 +22,7 @@ resource "azurerm_public_ip" "cyclecloud" {
 resource "azurerm_network_security_group" "cyclecloud" {
   count               = local.use_public_ip ? 1 : 0
   location            = var.location
-  name                = "nsg-${random_pet.naming.id}-cc"
+  name                = "${local.naming_token}-nsg-cc"
   resource_group_name = azurerm_resource_group.testing.name
   tags                = local.common_tags
 
@@ -58,6 +49,18 @@ resource "azurerm_network_security_group" "cyclecloud" {
     source_address_prefix      = local.configured_current_ip_address
     destination_address_prefix = "*"
   }
+
+  security_rule {
+    name                       = "allow-8080-from-caller"
+    priority                   = 120
+    direction                  = "Inbound"
+    access                     = "Allow"
+    protocol                   = "Tcp"
+    source_port_range          = "*"
+    destination_port_range     = "8080"
+    source_address_prefix      = local.configured_current_ip_address
+    destination_address_prefix = "*"
+  }
 }
 
 resource "azurerm_network_interface_security_group_association" "cyclecloud" {
@@ -68,43 +71,38 @@ resource "azurerm_network_interface_security_group_association" "cyclecloud" {
 
 resource "azurerm_network_interface" "cyclecloud" {
   location            = var.location
-  name                = "nic-cc-${random_pet.naming.id}"
+  name                = "${local.naming_token}-nic-cc"
   resource_group_name = azurerm_resource_group.testing.name
   tags                = local.common_tags
 
   ip_configuration {
-    name                          = "ipconfig-cc-${random_pet.naming.id}"
+    name                          = "${local.naming_token}-ipconfig-cc"
     private_ip_address_allocation = "Dynamic"
     subnet_id                     = azurerm_subnet.cyclecloud["server"].id
     public_ip_address_id          = local.use_public_ip ? azurerm_public_ip.cyclecloud[0].id : null
   }
 }
 
-resource "azurerm_managed_disk" "cyclecloud" {
-  create_option        = "FromImage"
-  image_reference_id   = data.azurerm_platform_image.ubuntu.id
-  location             = var.location
-  name                 = "osdisk-${random_pet.naming.id}-cc"
-  resource_group_name  = azurerm_resource_group.testing.name
-  storage_account_type = "Premium_LRS"
-  disk_size_gb         = 256
-  os_type              = "Linux"
-  tags                 = local.common_tags
-}
-
 resource "azurerm_linux_virtual_machine" "cyclecloud" {
   location              = var.location
-  name                  = "vm-${random_pet.naming.id}-cyclecloud"
+  name                  = "${local.naming_token}-vm-cyclecloud"
   network_interface_ids = [azurerm_network_interface.cyclecloud.id]
   resource_group_name   = azurerm_resource_group.testing.name
   size                  = "Standard_D4alds_v6"
   admin_username        = var.vm_admin_username
   tags                  = local.common_tags
 
-  os_managed_disk_id = azurerm_managed_disk.cyclecloud.id
-
   os_disk {
-    caching = "ReadWrite"
+    caching              = "ReadWrite"
+    storage_account_type = "Premium_LRS"
+    name                 = "${local.naming_token}-disk-os"
+  }
+
+  source_image_reference {
+    publisher = "Canonical"
+    offer     = "ubuntu-24_04-lts"
+    sku       = "server"
+    version   = "latest"
   }
 
   custom_data = data.cloudinit_config.cyclecloud.rendered
@@ -121,4 +119,14 @@ resource "azurerm_linux_virtual_machine" "cyclecloud" {
     type         = "SystemAssigned, UserAssigned"
     identity_ids = [azurerm_user_assigned_identity.cyclecloud.id]
   }
+}
+
+resource "azurerm_virtual_machine_extension" "ama" {
+  name                       = "AzureMonitorLinuxAgent"
+  publisher                  = "Microsoft.Azure.Monitor"
+  type                       = "AzureMonitorLinuxAgent"
+  type_handler_version       = "1.0"
+  virtual_machine_id         = azurerm_linux_virtual_machine.cyclecloud.id
+  auto_upgrade_minor_version = true
+  automatic_upgrade_enabled  = true
 }

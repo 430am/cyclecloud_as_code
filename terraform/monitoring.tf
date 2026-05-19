@@ -1,6 +1,15 @@
+resource "azurerm_log_analytics_linked_storage_account" "monitoring" {
+  depends_on = [azurerm_role_assignment.monitoring, time_sleep.linked_storage_wait]
+
+  data_source_type    = "Ingestion"
+  resource_group_name = azurerm_resource_group.testing.name
+  storage_account_ids = [azurerm_storage_account.monitoring.id]
+  workspace_id        = azurerm_log_analytics_workspace.monitoring.id
+}
+
 resource "azurerm_log_analytics_workspace" "monitoring" {
   location            = var.location
-  name                = substr("logs${random_pet.naming.id}", 0, 24)
+  name                = substr("${local.naming_token}-la", 0, 63)
   resource_group_name = azurerm_resource_group.testing.name
   sku                 = "PerGB2018"
   retention_in_days   = 30
@@ -15,7 +24,7 @@ resource "azurerm_storage_account" "monitoring" {
   account_replication_type        = "LRS"
   account_tier                    = "Standard"
   location                        = var.location
-  name                            = substr("st${random_pet.naming.id}", 0, 24)
+  name                            = substr("${local.naming_token_compact}st", 0, 24)
   resource_group_name             = azurerm_resource_group.testing.name
   tags                            = local.common_tags
   shared_access_key_enabled       = false
@@ -26,17 +35,85 @@ resource "azurerm_storage_account" "monitoring" {
   # network access disabled, network_rules is ignored, so it's omitted.
 }
 
-resource "azurerm_log_analytics_linked_storage_account" "monitoring" {
-  data_source_type    = "Ingestion"
-  resource_group_name = azurerm_resource_group.testing.name
-  storage_account_ids = [azurerm_storage_account.monitoring.id]
-  workspace_id        = azurerm_log_analytics_workspace.monitoring.id
-
-  depends_on = [azurerm_role_assignment.monitoring, time_sleep.linked_storage_wait]
-}
-
 resource "time_sleep" "linked_storage_wait" {
-  create_duration = "60s"
-
   depends_on = [azurerm_role_assignment.monitoring]
+
+  create_duration = "60s"
 }
+
+# Diagnostic settings route audit / metric data to the Log Analytics workspace
+# for traceability. The provider's data-plane fetch for log/metric categories
+# requires the target resource to exist, hence the implicit dependency via
+# `target_resource_id`.
+resource "azurerm_monitor_diagnostic_setting" "key_vault" {
+  name                       = "${local.naming_token}-diag-kv"
+  target_resource_id         = azurerm_key_vault.cyclecloud.id
+  log_analytics_workspace_id = azurerm_log_analytics_workspace.monitoring.id
+
+  enabled_log {
+    category = "AuditEvent"
+  }
+
+  enabled_log {
+    category = "AzurePolicyEvaluationDetails"
+  }
+
+  enabled_metric {
+    category = "AllMetrics"
+  }
+}
+
+resource "azurerm_monitor_diagnostic_setting" "cyclecloud_vm" {
+  name                       = "${local.naming_token}-diag-vm"
+  target_resource_id         = azurerm_linux_virtual_machine.cyclecloud.id
+  log_analytics_workspace_id = azurerm_log_analytics_workspace.monitoring.id
+
+  enabled_metric {
+    category = "AllMetrics"
+  }
+}
+
+resource "azurerm_monitor_diagnostic_setting" "monitoring_blob" {
+  name                       = "${local.naming_token}-diag-blob"
+  target_resource_id         = "${azurerm_storage_account.monitoring.id}/blobServices/default"
+  log_analytics_workspace_id = azurerm_log_analytics_workspace.monitoring.id
+
+  enabled_log {
+    category = "StorageRead"
+  }
+
+  enabled_log {
+    category = "StorageWrite"
+  }
+
+  enabled_log {
+    category = "StorageDelete"
+  }
+
+  enabled_metric {
+    category = "Transaction"
+  }
+}
+
+resource "azurerm_monitor_diagnostic_setting" "monitoring_table" {
+  name                       = "${local.naming_token}-diag-table"
+  target_resource_id         = "${azurerm_storage_account.monitoring.id}/tableServices/default"
+  log_analytics_workspace_id = azurerm_log_analytics_workspace.monitoring.id
+
+  enabled_log {
+    category = "StorageRead"
+  }
+
+  enabled_log {
+    category = "StorageWrite"
+  }
+
+  enabled_log {
+    category = "StorageDelete"
+  }
+
+  enabled_metric {
+    category = "Transaction"
+  }
+}
+

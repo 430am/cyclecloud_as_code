@@ -1,6 +1,6 @@
 resource "azurerm_key_vault" "cyclecloud" {
   location                   = var.location
-  name                       = substr("kv${random_pet.naming.id}", 0, 24)
+  name                       = substr("${local.naming_token}-kv", 0, 24)
   resource_group_name        = azurerm_resource_group.testing.name
   sku_name                   = "standard"
   tenant_id                  = data.azurerm_client_config.current.tenant_id
@@ -11,20 +11,33 @@ resource "azurerm_key_vault" "cyclecloud" {
   network_acls {
     default_action = "Deny"
     bypass         = "AzureServices"
-    ip_rules       = [var.CURRENT_IP_ADDRESS]
+    ip_rules       = [var.current_ip_address]
   }
 }
 
+# Wait for the caller's "Key Vault Administrator" RBAC assignment to propagate
+# before writing secrets. Without this, the data-plane Get/Set calls the
+# provider makes can return 403 ForbiddenByRbac for ~30-60s after the
+# assignment is created.
+resource "time_sleep" "kv_rbac_propagation" {
+  create_duration = "60s"
+  depends_on      = [azurerm_role_assignment.key_vault]
+}
+
 resource "azurerm_key_vault_secret" "private_key" {
+  depends_on = [time_sleep.kv_rbac_propagation]
+
   key_vault_id     = azurerm_key_vault.cyclecloud.id
-  name             = "cc-${random_pet.naming.id}-private-key"
+  name             = "${local.naming_token}-cc-private-key"
   value_wo         = ephemeral.tls_private_key.cyclecloud_ephemeral.private_key_openssh
   value_wo_version = 1
 }
 
 resource "azurerm_key_vault_secret" "public_key" {
+  depends_on = [time_sleep.kv_rbac_propagation]
+
   key_vault_id     = azurerm_key_vault.cyclecloud.id
-  name             = "cc-${random_pet.naming.id}-public-key"
+  name             = "${local.naming_token}-cc-public-key"
   value_wo         = ephemeral.tls_public_key.cyclecloud_ephemeral.public_key_openssh
   value_wo_version = 1
 }
@@ -35,6 +48,4 @@ resource "azurerm_key_vault_secret" "public_key" {
 data "azurerm_key_vault_secret" "public_key" {
   key_vault_id = azurerm_key_vault.cyclecloud.id
   name         = azurerm_key_vault_secret.public_key.name
-
-  depends_on = [azurerm_key_vault_secret.public_key]
 }

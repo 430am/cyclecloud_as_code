@@ -12,7 +12,7 @@ resource "random_pet" "naming" {
 }
 
 resource "azurerm_resource_group" "testing" {
-  name     = "rg-${random_pet.naming.id}"
+  name     = "${local.naming_token}-rg"
   location = var.location
 }
 

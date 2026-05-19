@@ -1,8 +1,14 @@
 locals {
-  configured_current_ip_address = trimspace(var.CURRENT_IP_ADDRESS)
+  configured_current_ip_address = trimspace(var.current_ip_address)
 
   use_bastion   = var.access_mode == "bastion"
   use_public_ip = var.access_mode == "public_ip"
+
+  # Naming token used as the leading `<product>` segment in every resource
+  # name. Falls back to `random_pet.naming.id` when `var.application_name` is
+  # left empty (default).
+  naming_token         = coalesce(var.application_name, random_pet.naming.id)
+  naming_token_compact = replace(local.naming_token, "-", "")
 
   common_tags = merge(var.tags, {
     deployed_by = data.azuread_user.current_user.display_name

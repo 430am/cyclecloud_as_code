@@ -12,4 +12,4 @@ ARM_TENANT_ID       = "00000000-0000-0000-0000-000000000000"
 # for Terraform configuration. This should be the public IP address of 
 # the user running Terraform, or a CIDR block that includes it, to 
 # allow dataplane access to resources placed behind a private endpoint.
-CURRENT_IP_ADDRESS = "0.0.0.0"
+current_ip_address = "0.0.0.0"
