@@ -47,6 +47,37 @@ quotas are rejected with `InvalidShareQuota`. For this dev environment
 the extra capacity is cheap noise; revisit if cost matters or if Azure
 ever lifts the floor.
 
+## HTTPS on 8443 is not configured out of the box
+
+The `cyclecloud8` Debian package install on Ubuntu ships **without** a
+TLS keystore, so the CycleCloud web app only listens on **HTTP 8080**
+after `await_startup` returns. Port 8443 is open at the NSG level (NIC +
+subnet) but the cycle_server process never binds to it until you
+generate a keystore.
+
+That's why the cloud-init bootstrap calls
+`cyclecloud initialize --url=http://localhost:8080/` instead of the
+HTTPS form -- loopback HTTP is the only port that exists, and the
+traffic never leaves the VM so there's nothing to protect.
+
+For operator-facing access this means:
+
+- **Bastion mode**: the tunnel forwards 8080 (see
+  [access-modes.md](access-modes.md#option-a-bastion-access_mode--bastion)).
+  Browser-to-Bastion is HTTPS (Bastion's own cert); only the inside of
+  the tunnel is plaintext.
+- **public_ip mode**: HTTP runs unencrypted over the Internet, scoped to
+  `var.current_ip_address` by NSG but still in cleartext. Acceptable
+  for a dev box; **do not** use this mode for anything sensitive without
+  enabling TLS first.
+
+**Fix path** (untested in this repo): after `await_startup` succeeds,
+run something like
+`/opt/cycle_server/cycle_server keystore automatic <hostname>` (or the
+equivalent CC8 utility), wait for 8443 to respond, then point both the
+bootstrap CLI and the operator docs back at `https://...:8443/`. The
+NSG rules are already in place.
+
 ## CycleCloud Insiders / version pinning
 
 The cloud-init pulls `cyclecloud stable main`; no version pin.

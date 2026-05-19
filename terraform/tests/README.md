@@ -48,7 +48,7 @@ left unmocked: they're local-only (no network, no credentials) and the
   subnet NSG rules expose exactly `22 / 8080 / 8443` from
   `var.current_ip_address` and nothing else.
 - **Cloud-init render** -- a test that asserts the rendered template
-  contains `https://localhost:8443/` and the locker SA name. Easiest if
+  contains `http://localhost:8080/` and the locker SA name. Easiest if
   the rendered string is exposed as an output (gated behind a test-only
   variable so it isn't shown in normal runs).
 - **`key_vault_allowed_ips` dedup** -- set `var.current_ip_address`

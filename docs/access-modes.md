@@ -12,8 +12,12 @@ flow — either deny wins. The subnet-level rules are added by
 `azurerm_network_security_rule.server_allow_caller_*` in
 [terraform/cyclecloud.tf](../terraform/cyclecloud.tf).
 
-CycleCloud 8 listens on **8080 (HTTP)** and **8443 (HTTPS)**, not the
-standard 80/443. SSH is on 22 as usual. Both NSGs allow only 22/8080/8443.
+CycleCloud 8 listens on **HTTP 8080** out of the box. **HTTPS 8443 is
+NOT open** until a TLS keystore is configured on the VM (the Ubuntu
+package install ships without a self-signed cert -- see
+[known-gaps.md](known-gaps.md#https-on-8443-is-not-configured-out-of-the-box)).
+SSH is on 22 as usual. Both NSGs allow 22/8080/8443 (8443 is pre-opened
+for when you do enable TLS).
 
 ## Option A: Bastion (`access_mode = "bastion"`)
 
@@ -26,16 +30,17 @@ RG=$(terraform output -raw resource_group_name)
 VM_ID=$(az vm show -g "$RG" -n "$(terraform output -raw cyclecloud_vm_name)" --query id -o tsv)
 BAS=$(terraform output -raw bastion_host_name)
 
-# Forward localhost:8443 -> VM:8443 (CycleCloud HTTPS)
+# Forward localhost:8080 -> VM:8080 (CycleCloud HTTP)
 az network bastion tunnel \
   --name "$BAS" --resource-group "$RG" \
   --target-resource-id "$VM_ID" \
-  --resource-port 8443 --port 8443
+  --resource-port 8080 --port 8080
 ```
 
-Then browse to <https://localhost:8443> (the cert is self-signed, so the
-browser will warn) and sign in (see
+Then browse to <http://localhost:8080> and sign in (see
 [post-deploy.md](post-deploy.md#logging-into-the-web-ui) for the credentials).
+The browser-to-Bastion hop is HTTPS (Bastion's own TLS); only the
+Bastion-to-VM hop inside the tunnel is plaintext HTTP.
 
 For SSH over Bastion, see [ssh-key.md](ssh-key.md#2c-ssh-over-azure-bastion-tunneling).
 
@@ -49,8 +54,9 @@ cd terraform
 
 IP=$(terraform output -raw cyclecloud_vm_public_ip)
 
-# Web UI (CycleCloud serves HTTPS on 8443; cert is self-signed)
-open https://$IP:8443/
+# Web UI (HTTP only by default -- traffic is unencrypted on the wire).
+# Configure TLS on the VM if this matters; see known-gaps.md.
+open http://$IP:8080/
 
 # SSH using the key from Key Vault (see ssh-key.md)
 ssh -i ~/.ssh/cyclecloud.pem "$(terraform output -raw cyclecloud_vm_admin_username)@$IP"

@@ -57,7 +57,9 @@ variable "access_mode" {
     How to reach the CycleCloud server VM:
       - "bastion"   : deploy Azure Bastion (Standard, tunneling enabled); VM has no public IP.
       - "public_ip" : attach a Standard public IP to the VM NIC and create an NSG that
-                      allows SSH (22) and HTTPS (443) inbound from var.current_ip_address only.
+                      allows SSH (22), HTTP (8080) and HTTPS (8443) inbound from
+                      var.current_ip_address only. Note: CycleCloud only binds 8443
+                      once a TLS keystore is configured -- see docs/known-gaps.md.
                       No Bastion / AzureBastionSubnet is deployed.
   EOT
   type        = string

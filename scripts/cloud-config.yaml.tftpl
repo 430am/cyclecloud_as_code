@@ -147,10 +147,13 @@ runcmd:
     done
 
     # Initialize the CLI for the admin user, then register the subscription.
-    # CycleCloud 8 listens on 8080 (HTTP) and 8443 (HTTPS) by default, NOT
-    # the standard 80/443, so the URL below must include :8443 explicitly.
+    # CycleCloud 8 listens on HTTP **8080** by default. Port 8443 (HTTPS) is
+    # NOT open until a TLS keystore is configured (see docs/known-gaps.md --
+    # the Ubuntu package install ships without a self-signed cert, unlike the
+    # Marketplace image). Bootstrapping over the loopback HTTP port avoids
+    # the chicken-and-egg TLS problem; the traffic never leaves the VM.
     runuser -l ${admin_user} -c "/usr/local/bin/cyclecloud initialize --batch \
-        --url=https://localhost:8443/ --verify-ssl=false \
+        --url=http://localhost:8080/ \
         --username='${admin_user}' --password='$CCPASSWORD'"
     install -m 0644 -o ${admin_user} -g ${admin_user} /tmp/cyclecloud/azure_data.json /home/${admin_user}/azure_data.json
     runuser -l ${admin_user} -c "/usr/local/bin/cyclecloud account create -f /home/${admin_user}/azure_data.json"
