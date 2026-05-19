@@ -79,6 +79,12 @@ resource "azurerm_user_assigned_identity" "cyclecloud" {
   tags                = local.common_tags
 }
 
+resource "azurerm_role_assignment" "uai_assignment" {
+  principal_id         = azurerm_user_assigned_identity.cyclecloud.principal_id
+  scope                = data.azurerm_subscription.current.id
+  role_definition_name = azurerm_role_definition.cyclecloud.name
+}
+
 resource "azurerm_role_assignment" "cyclecloud" {
   principal_id         = azurerm_linux_virtual_machine.cyclecloud.identity[0].principal_id
   scope                = data.azurerm_subscription.current.id

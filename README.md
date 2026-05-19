@@ -23,7 +23,7 @@ for CycleCloud to manage compute resources in the same subscription.
 | [terraform/locker.tf](terraform/locker.tf) | Dedicated CycleCloud locker storage account (LRS, RBAC-only, public network disabled) with a private `cyclecloud` blob container and diagnostic settings forwarded to the shared workspace — isolated from the monitoring SA so locker churn doesn't pollute diagnostic logs and the VM identity's blob-data RBAC stays scoped to one account |
 | [terraform/private_endpoints.tf](terraform/private_endpoints.tf) | Private DNS zones, VNet links, AMPLS scope + scoped service, PEs for Key Vault, monitoring storage (blob + table), locker storage (blob), AMPLS |
 | [terraform/cyclecloud.tf](terraform/cyclecloud.tf) | Ubuntu 24.04 managed OS disk built `FromImage`, NIC in `server` subnet, VM with `SystemAssigned + UserAssigned` identity, cloud-init rendered from [scripts/cloud-config.yaml.tftpl](scripts/cloud-config.yaml.tftpl) via `templatefile()`, Azure Monitor Linux Agent (`AzureMonitorLinuxAgent`) VM extension, boot diagnostics on Azure-managed storage; optional public IP + NSG on the NIC when `access_mode = "public_ip"` |
-| [terraform/roles.tf](terraform/roles.tf) | Custom **CycleCloud Orchestrator Role `<naming_token>`** assigned to the VM identity at subscription scope, Key Vault Administrator for caller, Key Vault Secrets User + Storage Blob Data Contributor (scoped to the dedicated locker SA) for the VM identity, Storage Blob + Table Data Contributor for the LA workspace identity on the monitoring SA |
+| [terraform/roles.tf](terraform/roles.tf) | Custom **CycleCloud Orchestrator Role `<naming_token>`** assigned at subscription scope to **both** the VM's system-assigned identity and the user-assigned identity (`azurerm_user_assigned_identity.cyclecloud`, attached to the VM and reserved for cluster-node use). Key Vault Administrator for caller, Key Vault Secrets User + Storage Blob Data Contributor (scoped to the dedicated locker SA) for the VM identity, Storage Blob + Table Data Contributor for the LA workspace identity on the monitoring SA |
 | [terraform/locals.tf](terraform/locals.tf) | Subnet CIDR math via `cidrsubnet`, tag merging, DNS zone catalogs, `naming_token` / `naming_token_compact` (drive every resource name) |
 | [terraform/outputs.tf](terraform/outputs.tf) | Resource group, VM name/IP, Bastion name, Key Vault URI, etc. |
 | [scripts/cloud-config.yaml.tftpl](scripts/cloud-config.yaml.tftpl) | cloud-init template: installs OpenJDK 8, Azure CLI, and `cyclecloud8`, then runs the Phase 1 bootstrap — fetches the admin password + public key from Key Vault via managed identity, drops `account_data.json` into `/opt/cycle_server/config/data/` to bypass the web wizard, installs the CycleCloud CLI, runs `cyclecloud initialize` + `cyclecloud account create` to register the subscription with MSI auth. All secret-dependent steps live in a single `runcmd` shell block so the `CCPASSWORD` / `CCPUBKEY` shell vars stay in scope (cloud-init runs each list item in a fresh shell) |
@@ -154,7 +154,8 @@ flowchart LR
     customRole -. "scope: subscription" .- SUB
     vm -- "system MI" --> sPwd
     vm -- "system MI" --> sPub
-    uai -. "attached for<br/>future cluster nodes" .- vm
+    uai -. "CycleCloud Orchestrator<br/>(subscription scope)" .-> customRole
+    uai -. "attached to VM<br/>(future cluster nodes)" .- vm
 
     %% Diagnostics
     kv      -. diag .-> la
@@ -192,7 +193,10 @@ flowchart LR
   the custom **CycleCloud Orchestrator** role at subscription scope (it
   also gets `Key Vault Secrets User` on the vault and
   `Storage Blob Data Contributor` on the locker SA). The **user-assigned**
-  identity is attached but reserved for future cluster-node use.
+  identity is attached to the VM and **also** holds the same
+  CycleCloud Orchestrator role at subscription scope, so future
+  cluster-node or CycleCloud-account auth flows that present the UAI
+  have the same compute-management authority.
 
 ## Quickstart
 

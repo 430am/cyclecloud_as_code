@@ -13,12 +13,6 @@ NIC NSG **and** the matching subnet-NSG rules
 [terraform/cyclecloud.tf](../terraform/cyclecloud.tf)) provide the
 Internet-facing allow rules.
 
-## User-assigned identity has no role assignments
-
-`azurerm_user_assigned_identity.cyclecloud` is attached to the VM but has
-no role assignments of its own. It's reserved for future cluster nodes /
-CycleCloud account configuration.
-
 ## Key Vault firewall
 
 `network_acls.default_action` is currently **`Allow`** — a temporary
@@ -42,13 +36,6 @@ service-principal-IP allow list).
 Called on every plan / apply / destroy. Air-gapped or restricted-egress
 runners will fail there; swap to a known-static IP or short-circuit the
 data source when that matters.
-
-## AMA extension version pin
-
-`type_handler_version = "1.0"` in
-[terraform/cyclecloud.tf](../terraform/cyclecloud.tf) is the oldest schema;
-a newer pin (e.g. `"1.33"`) would surface explicit upgrade behavior. Auto-
-upgrade is enabled, so the agent itself is current regardless.
 
 ## CycleCloud Insiders / version pinning
 
