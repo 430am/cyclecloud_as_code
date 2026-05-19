@@ -38,37 +38,13 @@ resource "azurerm_network_security_group" "cyclecloud" {
   tags                = local.common_tags
 
   security_rule {
-    name                       = "allow-ssh-from-caller"
+    name                       = "allow-inbound-from-caller"
     priority                   = 100
     direction                  = "Inbound"
     access                     = "Allow"
     protocol                   = "Tcp"
     source_port_range          = "*"
-    destination_port_range     = "22"
-    source_address_prefix      = local.configured_current_ip_address
-    destination_address_prefix = "*"
-  }
-
-  security_rule {
-    name                       = "allow-https-from-caller"
-    priority                   = 110
-    direction                  = "Inbound"
-    access                     = "Allow"
-    protocol                   = "Tcp"
-    source_port_range          = "*"
-    destination_port_range     = "443"
-    source_address_prefix      = local.configured_current_ip_address
-    destination_address_prefix = "*"
-  }
-
-  security_rule {
-    name                       = "allow-8080-from-caller"
-    priority                   = 120
-    direction                  = "Inbound"
-    access                     = "Allow"
-    protocol                   = "Tcp"
-    source_port_range          = "*"
-    destination_port_range     = "8080"
+    destination_port_ranges    = ["22", "443", "8080"]
     source_address_prefix      = local.configured_current_ip_address
     destination_address_prefix = "*"
   }
@@ -78,6 +54,57 @@ resource "azurerm_network_interface_security_group_association" "cyclecloud" {
   count                     = local.use_public_ip ? 1 : 0
   network_interface_id      = azurerm_network_interface.cyclecloud.id
   network_security_group_id = azurerm_network_security_group.cyclecloud[0].id
+}
+
+# In public_ip mode the VM is reached over the Internet, but the `server`
+# subnet NSG (network.tf) only allows 22/443/8080 from `VirtualNetwork`.
+# Both the subnet NSG and the NIC NSG must Allow the flow — either deny wins
+# — so without these rules the NIC NSG's caller-IP rules are effectively
+# blackholed by the subnet NSG. Add matching subnet-level Allow rules so the
+# NIC NSG actually takes effect.
+resource "azurerm_network_security_rule" "server_allow_caller_ssh" {
+  count                       = local.use_public_ip ? 1 : 0
+  name                        = "allow-ssh-from-caller"
+  priority                    = 200
+  direction                   = "Inbound"
+  access                      = "Allow"
+  protocol                    = "Tcp"
+  source_port_range           = "*"
+  destination_port_range      = "22"
+  source_address_prefix       = local.configured_current_ip_address
+  destination_address_prefix  = "*"
+  resource_group_name         = azurerm_resource_group.testing.name
+  network_security_group_name = azurerm_network_security_group.server.name
+}
+
+resource "azurerm_network_security_rule" "server_allow_caller_https" {
+  count                       = local.use_public_ip ? 1 : 0
+  name                        = "allow-https-from-caller"
+  priority                    = 210
+  direction                   = "Inbound"
+  access                      = "Allow"
+  protocol                    = "Tcp"
+  source_port_range           = "*"
+  destination_port_range      = "443"
+  source_address_prefix       = local.configured_current_ip_address
+  destination_address_prefix  = "*"
+  resource_group_name         = azurerm_resource_group.testing.name
+  network_security_group_name = azurerm_network_security_group.server.name
+}
+
+resource "azurerm_network_security_rule" "server_allow_caller_8080" {
+  count                       = local.use_public_ip ? 1 : 0
+  name                        = "allow-8080-from-caller"
+  priority                    = 220
+  direction                   = "Inbound"
+  access                      = "Allow"
+  protocol                    = "Tcp"
+  source_port_range           = "*"
+  destination_port_range      = "8080"
+  source_address_prefix       = local.configured_current_ip_address
+  destination_address_prefix  = "*"
+  resource_group_name         = azurerm_resource_group.testing.name
+  network_security_group_name = azurerm_network_security_group.server.name
 }
 
 resource "azurerm_network_interface" "cyclecloud" {

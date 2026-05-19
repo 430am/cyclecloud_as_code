@@ -14,7 +14,7 @@ resource "azurerm_storage_account" "locker" {
   account_replication_type        = "LRS"
   account_tier                    = "Standard"
   location                        = var.location
-  name                            = substr("${local.naming_token_compact}cc", 0, 24)
+  name                            = substr("${local.naming_token_compact}stcc", 0, 24)
   resource_group_name             = azurerm_resource_group.testing.name
   tags                            = local.common_tags
   shared_access_key_enabled       = false

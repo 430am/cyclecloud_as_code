@@ -17,7 +17,7 @@ for CycleCloud to manage compute resources in the same subscription.
 | [terraform/network.tf](terraform/network.tf) | VNet `10.150.0.0/16`, four subnets via `for_each` over `local.subnets`, NSG on the `server` subnet, NSG on `AzureBastionSubnet` (bastion mode only) |
 | [terraform/natgateway.tf](terraform/natgateway.tf) | NAT Gateway + public IP, attached to the `cluster` and `server` subnets |
 | [terraform/bastion.tf](terraform/bastion.tf) | Standard SKU Bastion with tunneling enabled (only when `access_mode = "bastion"`) |
-| [terraform/keyvault.tf](terraform/keyvault.tf) | RBAC-mode Key Vault holding an ephemeral ED25519 SSH key pair (write-only secrets) and an auto-generated CycleCloud web-UI admin password, plus a `time_sleep` to wait for the caller's KV Administrator RBAC assignment to propagate before secrets are written |
+| [terraform/keyvault.tf](terraform/keyvault.tf) | RBAC-mode Key Vault holding an ephemeral ED25519 SSH key pair (write-only secrets) and an auto-generated CycleCloud web-UI admin password, plus a `time_sleep` to wait for the caller's KV Administrator RBAC assignment to propagate before secrets are written. **`network_acls.default_action` is currently `Allow`** (see [Known gaps](#known-gaps--todo)); the `ip_rules` list (configured + auto-detected operator IP) is computed but not enforcing |
 | [terraform/ssh.tf](terraform/ssh.tf) | `ephemeral.tls_private_key` (ED25519) + `ephemeral.tls_public_key` — in-memory key pair that is never written to state; only the Key Vault secrets persist |
 | [terraform/monitoring.tf](terraform/monitoring.tf) | Log Analytics workspace, linked storage account (private-only), `azurerm_log_analytics_linked_storage_account`, diagnostic settings for Key Vault / VM / monitoring storage blob+table services |
 | [terraform/locker.tf](terraform/locker.tf) | Dedicated CycleCloud locker storage account (LRS, RBAC-only, public network disabled) with a private `cyclecloud` blob container and diagnostic settings forwarded to the shared workspace — isolated from the monitoring SA so locker churn doesn't pollute diagnostic logs and the VM identity's blob-data RBAC stays scoped to one account |
@@ -26,7 +26,7 @@ for CycleCloud to manage compute resources in the same subscription.
 | [terraform/roles.tf](terraform/roles.tf) | Custom **CycleCloud Orchestrator Role `<naming_token>`** assigned to the VM identity at subscription scope, Key Vault Administrator for caller, Key Vault Secrets User + Storage Blob Data Contributor (scoped to the dedicated locker SA) for the VM identity, Storage Blob + Table Data Contributor for the LA workspace identity on the monitoring SA |
 | [terraform/locals.tf](terraform/locals.tf) | Subnet CIDR math via `cidrsubnet`, tag merging, DNS zone catalogs, `naming_token` / `naming_token_compact` (drive every resource name) |
 | [terraform/outputs.tf](terraform/outputs.tf) | Resource group, VM name/IP, Bastion name, Key Vault URI, etc. |
-| [scripts/cloud-config.yaml.tftpl](scripts/cloud-config.yaml.tftpl) | cloud-init template: installs OpenJDK 8, Azure CLI, and `cyclecloud8`, then runs the Phase 2 bootstrap — fetches the admin password + public key from Key Vault via managed identity, drops `account_data.json` into `/opt/cycle_server/config/data/` to bypass the web wizard, installs the CycleCloud CLI, runs `cyclecloud initialize` + `cyclecloud account create` to register the subscription with MSI auth |
+| [scripts/cloud-config.yaml.tftpl](scripts/cloud-config.yaml.tftpl) | cloud-init template: installs OpenJDK 8, Azure CLI, and `cyclecloud8`, then runs the Phase 1 bootstrap — fetches the admin password + public key from Key Vault via managed identity, drops `account_data.json` into `/opt/cycle_server/config/data/` to bypass the web wizard, installs the CycleCloud CLI, runs `cyclecloud initialize` + `cyclecloud account create` to register the subscription with MSI auth. All secret-dependent steps live in a single `runcmd` shell block so the `CCPASSWORD` / `CCPUBKEY` shell vars stay in scope (cloud-init runs each list item in a fresh shell) |
 
 ### Subnet layout
 
@@ -39,6 +39,160 @@ for CycleCloud to manage compute resources in the same subscription.
 | `server` | `10.150.2.64/26` | CycleCloud server VM NIC |
 | `AzureBastionSubnet` | `10.150.2.128/26` | Bastion (name is required by Azure; only created when `access_mode = "bastion"`) |
 
+## Architecture
+
+The diagram below shows the Azure resources created by a single `terraform
+apply` and how they wire together. Dashed components are conditional on
+`var.access_mode` (Bastion vs. direct public IP); everything else is deployed
+unconditionally.
+
+```mermaid
+flowchart LR
+    operator(["Operator<br/>(current_ip_address)"])
+    internet{{Internet}}
+
+    subgraph SUB["Azure Subscription"]
+        customRole["Custom role:<br/>CycleCloud Orchestrator"]
+
+        subgraph RG["Resource Group: &lt;naming_token&gt;-rg"]
+            direction LR
+
+            uai["User-Assigned MI<br/>&lt;naming_token&gt;-uai"]
+
+            subgraph KVBOX["Key Vault (RBAC; firewall: Allow + IP list)"]
+                kv[("Key Vault<br/>&lt;naming_token&gt;kv")]
+                sPwd["secret: cc-admin-password"]
+                sPriv["secret: cc-private-key"]
+                sPub["secret: cc-public-key"]
+                kv --- sPwd
+                kv --- sPriv
+                kv --- sPub
+            end
+
+            subgraph MON["Observability"]
+                la["Log Analytics<br/>Workspace"]
+                ampls["AMPLS<br/>(Private-Only)"]
+                stMon[("Storage Account<br/>monitoring (LRS)<br/>public access: disabled")]
+                la --- ampls
+                la -- linked ingestion --> stMon
+            end
+
+            subgraph LOCK["CycleCloud Locker"]
+                stLocker[("Storage Account<br/>locker (LRS)<br/>public access: disabled")]
+                ccContainer["blob container:<br/>cyclecloud"]
+                stLocker --- ccContainer
+            end
+
+            subgraph VNET["VNet 10.150.0.0/16"]
+                direction TB
+
+                subgraph SNCluster["subnet: cluster<br/>10.150.0.0/23"]
+                    clusterFuture["(future CycleCloud<br/>compute nodes)"]
+                end
+
+                subgraph SNServer["subnet: server (NSG)<br/>10.150.2.64/26"]
+                    nic["NIC<br/>nic-cc"]
+                    vm["Linux VM (Ubuntu 24.04)<br/>vm-cyclecloud<br/>SystemAssigned + UAI<br/>+ AzureMonitorLinuxAgent"]
+                    osDisk[("Managed OS Disk<br/>Premium_LRS")]
+                    nic --- vm
+                    vm --- osDisk
+                end
+
+                subgraph SNPE["subnet: private_endpoint<br/>10.150.2.0/26"]
+                    peKv["PE → Key Vault"]
+                    peMonBlob["PE → monitoring blob"]
+                    peMonTbl["PE → monitoring table"]
+                    peLocker["PE → locker blob"]
+                    peAmpls["PE → AMPLS"]
+                end
+
+                subgraph SNBas["subnet: AzureBastionSubnet<br/>10.150.2.128/26"]
+                    bastion["Azure Bastion<br/>(Standard, tunneling)"]
+                end
+
+                pdns["Private DNS zones<br/>(vaultcore / blob / table /<br/>monitor / ods / oms / agentsvc)"]
+            end
+
+            nat["NAT Gateway<br/>+ Public IP"]
+            pipBas["Public IP (Bastion)"]
+            pipVm["Public IP (VM NIC)"]
+            nsgNic["NIC NSG<br/>(caller IP only)"]
+        end
+    end
+
+    %% Operator access paths
+    operator -- "HTTPS 443<br/>(Bastion mode)" -.-> pipBas -.-> bastion
+    bastion -.->|"SSH 22 /<br/>HTTPS tunnel"| vm
+    operator == "SSH 22 / HTTPS 443 / 8080<br/>(public_ip mode)" ==> pipVm
+    pipVm === nsgNic === nic
+
+    %% Egress
+    SNCluster -- egress --> nat
+    SNServer  -- egress --> nat
+    nat --> internet
+
+    %% Private-endpoint data paths (storage SAs have public access disabled;
+    %% the KV firewall is currently default-Allow, see Known gaps)
+    vm -- "MI: get secrets" --> peKv --> kv
+    vm -- "MI: blob R/W (locker)" --> peLocker --> stLocker
+    vm -- "AMA logs/metrics" --> peAmpls --> ampls
+    stMon -. PE .- peMonBlob
+    stMon -. PE .- peMonTbl
+    pdns -. resolves .- peKv
+    pdns -. resolves .- peMonBlob
+    pdns -. resolves .- peMonTbl
+    pdns -. resolves .- peLocker
+    pdns -. resolves .- peAmpls
+
+    %% KV firewall is default-Allow today, so the operator's data-plane calls
+    %% reach KV directly over the Internet (no IP filtering enforced)
+    operator -. "KV data plane<br/>(default-Allow today;<br/>IP list computed but<br/>not enforcing)" .- kv
+
+    %% Identity / RBAC
+    vm -- "system MI" --> customRole
+    customRole -. "scope: subscription" .- SUB
+    vm -- "system MI" --> sPwd
+    vm -- "system MI" --> sPub
+    uai -. "attached for<br/>future cluster nodes" .- vm
+
+    %% Diagnostics
+    kv      -. diag .-> la
+    vm      -. diag .-> la
+    stMon   -. diag .-> la
+    stLocker -. diag .-> la
+
+    classDef cond stroke-dasharray: 4 3,stroke:#888;
+    class bastion,pipBas,SNBas,pipVm,nsgNic cond;
+```
+
+**How to read it**
+
+- **Solid double-arrow** = `public_ip` mode operator path (direct SSH / HTTPS
+  from `var.current_ip_address` to the VM NIC's public IP, gated by both the
+  NIC NSG and the matching `server` subnet NSG rules).
+- **Dashed lines through Bastion** = `bastion` mode operator path (browser →
+  Bastion public IP → tunneled SSH/HTTPS to the VM's private IP; no public
+  IP on the VM).
+- **Private endpoints** in the `private_endpoint` subnet are how the VM
+  reaches Key Vault, the locker storage account, the monitoring storage
+  account, and Azure Monitor. Both storage accounts have `public_network_
+  access_enabled = false`, so they're reachable **only** via their PEs.
+  The Key Vault is **currently** configured with `network_acls.default_
+  action = "Allow"` (see [Known gaps](#known-gaps--todo)) — the
+  `key_vault_allowed_ips` list (configured + auto-detected operator IP) is
+  computed and assigned but not enforcing while default-Allow is in effect.
+  Private DNS zones are VNet-linked so the storage / KV FQDNs resolve to
+  the PE NICs from inside the VNet.
+- **NAT Gateway** provides deterministic egress for the `cluster` and
+  `server` subnets — required so package installs (`apt`, `cyclecloud8`,
+  Azure CLI) and any future cluster nodes have outbound Internet without
+  exposing inbound surface.
+- **Identity**: the VM's **system-assigned** MI is the principal that holds
+  the custom **CycleCloud Orchestrator** role at subscription scope (it
+  also gets `Key Vault Secrets User` on the vault and
+  `Storage Blob Data Contributor` on the locker SA). The **user-assigned**
+  identity is attached but reserved for future cluster-node use.
+
 ## Prerequisites
 
 - Terraform `~> 1.15` (uses `ephemeral` resources and write-only KV secret
@@ -48,9 +202,11 @@ for CycleCloud to manage compute resources in the same subscription.
 - The caller has rights to create custom role definitions and role assignments
   at the subscription scope (typically Owner or User Access Administrator +
   Contributor)
-- Your current public IPv4 — used to permit the Terraform runner through the
-  Key Vault firewall while it writes the SSH secrets, and (in `public_ip`
-  mode) as the only source allowed inbound to the VM NIC NSG
+- Your current public IPv4 (only **required** when `access_mode = "public_ip"`,
+  where it becomes the only source allowed inbound to the VM NIC NSG and the
+  matching `server` subnet NSG rules). The KV firewall is currently default-
+  Allow, so the IP isn't strictly required for KV access; see
+  [Known gaps](#known-gaps--todo)
 
 ## Usage
 
@@ -119,7 +275,10 @@ The connectivity model is controlled by `var.access_mode`:
 - `bastion` (default) — VM has no public IP; reach it via Azure Bastion
   tunneling. The `server` subnet NSG allows SSH (22), HTTPS (443) and the
   CycleCloud setup port (8080) inbound from `VirtualNetwork` only.
-- `public_ip` — VM gets a Standard public IP. A NIC-level NSG allows SSH (22),
+- `public_ip` — VM gets a Standard public IP. A NIC-level NSG **and**
+  matching subnet-level rules on the `server` NSG (added by
+  `azurerm_network_security_rule.server_allow_caller_*` in
+  [terraform/cyclecloud.tf](terraform/cyclecloud.tf)) allow SSH (22),
   HTTPS (443) and the CycleCloud setup port (8080) inbound from
   `var.current_ip_address` only. Bastion is not deployed.
 
@@ -177,9 +336,24 @@ az keyvault secret show \
 chmod 600 "$KEY_FILE"
 ```
 
-> Note: the Key Vault firewall only permits `var.current_ip_address`, so run
-> these commands from the same network you deployed from (or temporarily add
-> your current IP to the vault's allow list).
+A convenience wrapper that does the same thing lives at
+[post-config/downloadSSH.sh](post-config/downloadSSH.sh):
+
+```bash
+cd post-config && ./downloadSSH.sh
+```
+
+It `cd`s into `../terraform` so `terraform output` resolves, writes
+`~/.ssh/cyclecloud.pem`, and `chmod 600`s the result — useful after a fresh
+`terraform apply` or whenever you need to re-pull the key onto a new
+workstation.
+
+> Note: the Key Vault firewall is currently `default_action = "Allow"`
+> (see [Known gaps](#known-gaps--todo)), so the `az keyvault secret show`
+> calls below succeed from any source IP. The `ip_rules` allow list
+> (configured + auto-detected operator IP via `data.http.current_ip`) is
+> still computed in [terraform/locals.tf](terraform/locals.tf) so that
+> tightening `default_action` back to `Deny` is a one-line change.
 
 **2a. Use the key for a single SSH command**
 
@@ -254,9 +428,9 @@ Declared in [terraform/variables.tf](terraform/variables.tf):
 | `vm_admin_username` | string | `cyclecloudadmin` | Admin user on the CycleCloud VM |
 | `application_name` | string | `""` | Product / application name used as the leading token in every resource name (`<application_name>-<abbrev>...`). Must be 2-20 chars of lowercase letters/numbers/hyphens, starting with a letter. Empty (default) falls back to `random_pet.naming.id` for collision-free lab deployments. **Changing this after apply will destroy and recreate every resource** because Azure resource names are immutable |
 | `vnet_address_space` | list(string) | `["10.150.0.0/16"]` | VNet space; `locals.tf` carves subnets from `[0]` |
-| `access_mode` | string | `bastion` | `bastion` deploys Azure Bastion (no public IP on VM). `public_ip` attaches a Standard public IP + NSG to the VM NIC, allowing 22/443 inbound from `current_ip_address` only; no Bastion or `AzureBastionSubnet` is deployed |
+| `access_mode` | string | `bastion` | `bastion` deploys Azure Bastion (no public IP on VM). `public_ip` attaches a Standard public IP + NIC NSG to the VM and also opens matching rules on the `server` subnet NSG, allowing 22/443/8080 inbound from `current_ip_address` only; no Bastion or `AzureBastionSubnet` is deployed |
 | `tags` | map(string) | see file | Merged with a `deployed_by` tag |
-| `current_ip_address` | string | `""` | Caller's public IPv4 (or `x.x.x.x/32`). Used in the Key Vault firewall allow list and, when `access_mode = "public_ip"`, as the source for the VM NSG inbound rules. Must be a real value at apply time |
+| `current_ip_address` | string | `""` | Caller's public IPv4 (or `x.x.x.x/32`). Populated into `local.key_vault_allowed_ips` (alongside `data.http.current_ip`) and, when `access_mode = "public_ip"`, used as the source for the VM NIC NSG and the matching `server`-subnet NSG rules. Required when `access_mode = "public_ip"`; optional otherwise (the KV firewall is currently default-Allow, so the IP list isn't enforcing) |
 
 ## Naming convention
 
@@ -267,8 +441,10 @@ convention](https://andrewmatveychuk.com/naming-convention-for-azure-resources):
 - `<product>` is `var.application_name` if set, otherwise `random_pet.naming.id`
   (exposed as `local.naming_token`).
 - `<abbrev>` is the standard short type code: `rg`, `vnet`, `nsg`, `pip`,
-  `nat`, `bas`, `kv`, `la`, `st`, `vm`, `nic`, `uai`, `pe`, `psc`, `pdzg`,
-  `ampls`, `diag`, `disk`, `ipconfig`.
+  `nat`, `bas`, `kv`, `la`, `st` (storage uses suffixed variants `stmon`
+  for monitoring and `stcc` for the CycleCloud locker to disambiguate the
+  two accounts), `vm`, `nic`, `uai`, `pe`, `psc`, `pdzg`, `ampls`, `diag`,
+  `disk`, `ipconfig`.
 - `<identifier>` disambiguates when one resource type appears more than once
   (e.g. `pip-bas`, `pip-nat`, `pip-cc`; `nsg-server`, `nsg-bastion`, `nsg-cc`).
 - Storage account and Key Vault names use `local.naming_token_compact`
@@ -300,17 +476,23 @@ the only value actually consumed from the tfvars file by the configuration is
 The cloud-init bootstrap in
 [scripts/cloud-config.yaml.tftpl](scripts/cloud-config.yaml.tftpl) runs the
 full CycleCloud install end-to-end — there is **no web wizard to click
-through**. After `terraform apply` completes, the VM still needs ~5–10 minutes
-to finish:
+through**. This is **Phase 1** of the project (see
+[Known gaps](#known-gaps--todo) for Phase 2 — cluster automation). After
+`terraform apply` completes, the VM still needs ~5–10 minutes to finish:
 
 1. `cyclecloud8` package install
 2. `await_startup` (CycleCloud web app comes online)
-3. Managed-identity login + Key Vault secret fetch
-4. Drop `account_data.json` into `/opt/cycle_server/config/data/` (skips the
+3. CycleCloud CLI install from `/opt/cycle_server/tools/cyclecloud-cli.zip`
+4. Managed-identity login + Key Vault secret fetch (in the single
+   secret-dependent `runcmd` shell block — see the note in
+   [scripts/cloud-config.yaml.tftpl](scripts/cloud-config.yaml.tftpl) about
+   why everything that needs `CCPASSWORD` / `CCPUBKEY` has to share one
+   shell)
+5. Drop `account_data.json` into `/opt/cycle_server/config/data/` (skips the
    site name / EULA / admin-account wizard; CycleCloud renames it to
    `*.imported` once processed)
-5. `cyclecloud initialize --batch --url=https://localhost/ ...`
-6. `cyclecloud account create -f azure_data.json` (registers the subscription
+6. `cyclecloud initialize --batch --url=https://localhost/ ...`
+7. `cyclecloud account create -f azure_data.json` (registers the subscription
    using `AzureRMUseManagedIdentity: true`, with the locker storage account
    and `cyclecloud` container already provisioned by Terraform)
 
@@ -364,15 +546,28 @@ them up as needed:
 - **`azurerm_user_assigned_identity.cyclecloud`** is attached to the VM but
   has no role assignments of its own. It's reserved for future cluster nodes
   / CycleCloud account configuration.
-- **Key Vault firewall** allows a single `current_ip_address`. Empty string
-  default will fail apply; set it explicitly.
+- **Key Vault firewall is currently `default_action = "Allow"`** — a
+  temporary workaround to keep `terraform destroy` and operator
+  `az keyvault secret show` calls working regardless of egress IP. The
+  enforcing path (`default_action = "Deny"` + `ip_rules =
+  local.key_vault_allowed_ips`, where the list is the union of
+  `var.current_ip_address` and `data.http.current_ip` resolved at plan
+  time) is fully wired in [terraform/locals.tf](terraform/locals.tf) and
+  [terraform/keyvault.tf](terraform/keyvault.tf); flipping the action back
+  to `Deny` re-enables the IP allow-list. TODO: revert once the
+  destroy-time / CI access story is resolved (CI needs egress to
+  `api.ipify.org` for the auto-detection, or a static SP-IP allow-list).
+- **`data.http.current_ip`** calls `https://api.ipify.org` on every plan /
+  apply / destroy. Air-gapped or restricted-egress runners will fail there;
+  swap to a known-static IP or short-circuit the data source when that
+  matters.
 - **AMA extension version pin.** `type_handler_version = "1.0"` in
   [terraform/cyclecloud.tf](terraform/cyclecloud.tf) is the oldest schema; a
   newer pin (e.g. `"1.33"`) would surface explicit upgrade behavior. Auto-
   upgrade is enabled, so the agent itself is current regardless.
 - **CycleCloud Insiders / version pinning.** The cloud-init pulls
   `cyclecloud stable main`; no version pin.
-- **No automation of cluster creation (Phase 3).** Phase 2 (this repo) ends
+- **No automation of cluster creation (Phase 2).** Phase 1 (this repo) ends
   with the subscription registered. Adding
   `cyclecloud create_cluster <Template> <Name> -p params.json` +
   `cyclecloud start_cluster` to the cloud-init `runcmd` (and polling

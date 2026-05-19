@@ -1,6 +1,6 @@
 resource "azurerm_key_vault" "cyclecloud" {
   location                   = var.location
-  name                       = substr("${local.naming_token}-kv", 0, 24)
+  name                       = substr("${local.naming_token}kv", 0, 24)
   resource_group_name        = azurerm_resource_group.testing.name
   sku_name                   = "standard"
   tenant_id                  = data.azurerm_client_config.current.tenant_id
@@ -9,9 +9,13 @@ resource "azurerm_key_vault" "cyclecloud" {
   rbac_authorization_enabled = true
 
   network_acls {
-    default_action = "Deny"
+    default_action = "Allow"
     bypass         = "AzureServices"
-    ip_rules       = [var.current_ip_address]
+    # Always allow the operator's live public IP in addition to the
+    # configured value, so `terraform plan`/`apply`/`destroy` can reach the
+    # data plane even if the caller's egress IP has changed since the last
+    # apply (the secret resources do a data-plane Read on every refresh).
+    ip_rules = local.key_vault_allowed_ips
   }
 }
 

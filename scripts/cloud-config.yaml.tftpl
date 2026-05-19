@@ -92,21 +92,34 @@ runcmd:
   - apt-get -qq update
   - DEBIAN_FRONTEND=noninteractive apt-get -y install azure-cli cyclecloud8
 
-  # ----- Phase 2: skip the web wizard, register the subscription -------------
+  # ----- Phase 1: skip the web wizard, register the subscription -------------
   # Wait until the CycleCloud web app responds (cyclecloud8 starts the service
   # automatically, but it needs ~30-120s to become ready).
   - /opt/cycle_server/cycle_server await_startup
 
-  # Authenticate the VM's managed identity to ARM, then pull the admin
-  # password + SSH public key from Key Vault. The KV firewall denies public
-  # traffic; the VM reaches it via the private endpoint in private_endpoints.tf.
-  - az login --identity --allow-no-subscriptions
-  - CCPASSWORD=$(az keyvault secret show --vault-name "${key_vault_name}" --name "${pwd_secret_name}"    --query value -o tsv)
-  - CCPUBKEY=$(az keyvault secret show   --vault-name "${key_vault_name}" --name "${pubkey_secret_name}" --query value -o tsv)
+  # ----- Install the CycleCloud CLI (bundled with the server) ----------------
+  - unzip -o /opt/cycle_server/tools/cyclecloud-cli.zip -d /tmp/cyclecloud
+  - python3 /tmp/cyclecloud/cyclecloud-cli-installer/install.py -y --system --installdir /opt/cycle_server/.cycle
 
-  # Substitute placeholders into account_data.json. Use a delimiter that
-  # cannot appear in passwords/keys (|) and disable interpretation of & / \.
+  # ----- Phase 1 (continued): fetch secrets and finish bootstrap ------------
+  # IMPORTANT: cloud-init runs each `runcmd` item in its own shell, so shell
+  # variables (e.g. CCPASSWORD assigned via $(az keyvault secret show ...))
+  # do not persist between items.
   - |
+    set -euo pipefail
+
+    # Authenticate the VM's managed identity to ARM, then pull the admin
+    # password + SSH public key from Key Vault. The KV firewall denies public
+    # traffic; the VM reaches KV via the private endpoint in
+    # private_endpoints.tf.
+    az login --identity --allow-no-subscriptions
+    CCPASSWORD=$(az keyvault secret show --vault-name "${key_vault_name}" --name "${pwd_secret_name}"    --query value -o tsv)
+    CCPUBKEY=$(az keyvault secret show   --vault-name "${key_vault_name}" --name "${pubkey_secret_name}" --query value -o tsv)
+    export CCPASSWORD CCPUBKEY
+
+    # Substitute placeholders into account_data.json using python so the
+    # values are inserted literally (no shell / sed escaping concerns for
+    # special characters in the generated password).
     python3 - <<'PY'
     import json, os
     with open('/tmp/cyclecloud/account_data.json') as f:
@@ -118,29 +131,23 @@ runcmd:
     with open('/tmp/cyclecloud/account_data.json', 'w') as f:
         f.write(text)
     PY
-    env CCPASSWORD="$CCPASSWORD" CCPUBKEY="$CCPUBKEY" true
 
-  # Hand the file to CycleCloud's import loop. The file is renamed to
-  # .imported once processed (typically within a few seconds).
-  - install -m 0640 -o cycle_server -g cycle_server /tmp/cyclecloud/account_data.json /opt/cycle_server/config/data/account_data.json
-  - |
+    # Hand the file to CycleCloud's import loop. The file is renamed to
+    # .imported once processed (typically within a few seconds).
+    install -m 0640 -o cycle_server -g cycle_server /tmp/cyclecloud/account_data.json /opt/cycle_server/config/data/account_data.json
     for i in $(seq 1 60); do
       [ -f /opt/cycle_server/config/data/account_data.json.imported ] && break
       sleep 2
     done
 
-  # ----- Install the CycleCloud CLI (bundled with the server) ---------------
-  - unzip -o /opt/cycle_server/tools/cyclecloud-cli.zip -d /tmp/cyclecloud
-  - python3 /tmp/cyclecloud/cyclecloud-cli-installer/install.py -y --system --installdir /opt/cycle_server/.cycle
-
-  # ----- Initialize the CLI for the admin user, then register the sub -------
-  - |
+    # Initialize the CLI for the admin user, then register the subscription.
     runuser -l ${admin_user} -c "/usr/local/bin/cyclecloud initialize --batch \
         --url=https://localhost/ --verify-ssl=false \
         --username='${admin_user}' --password='$CCPASSWORD'"
-  - install -m 0644 -o ${admin_user} -g ${admin_user} /tmp/cyclecloud/azure_data.json /home/${admin_user}/azure_data.json
-  - runuser -l ${admin_user} -c "/usr/local/bin/cyclecloud account create -f /home/${admin_user}/azure_data.json"
+    install -m 0644 -o ${admin_user} -g ${admin_user} /tmp/cyclecloud/azure_data.json /home/${admin_user}/azure_data.json
+    runuser -l ${admin_user} -c "/usr/local/bin/cyclecloud account create -f /home/${admin_user}/azure_data.json"
 
-  # ----- Cleanup: scrub the secrets we materialized on disk -----------------
-  - shred -u /tmp/cyclecloud/account_data.json /home/${admin_user}/azure_data.json || true
-  - unset CCPASSWORD CCPUBKEY
+    # Scrub the secrets we materialized on disk. `unset` only affects this
+    # shell, but that's the only shell they ever lived in.
+    shred -u /tmp/cyclecloud/account_data.json /home/${admin_user}/azure_data.json || true
+    unset CCPASSWORD CCPUBKEY

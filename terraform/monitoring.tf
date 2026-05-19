@@ -24,7 +24,7 @@ resource "azurerm_storage_account" "monitoring" {
   account_replication_type        = "LRS"
   account_tier                    = "Standard"
   location                        = var.location
-  name                            = substr("${local.naming_token_compact}st", 0, 24)
+  name                            = substr("${local.naming_token_compact}stmon", 0, 24)
   resource_group_name             = azurerm_resource_group.testing.name
   tags                            = local.common_tags
   shared_access_key_enabled       = false

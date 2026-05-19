@@ -1,6 +1,21 @@
 locals {
   configured_current_ip_address = trimspace(var.current_ip_address)
 
+  # Live public IP of the machine running Terraform, used to keep the
+  # Key Vault firewall in sync with the operator's actual egress IP.
+  # Without this, `terraform destroy` fails with 403 ForbiddenByConnection
+  # when the data-plane refresh of azurerm_key_vault_secret runs from an
+  # IP that no longer matches var.current_ip_address.
+  detected_current_ip_address = trimspace(data.http.current_ip.response_body)
+
+  # Union of the configured (var) IP and the live detected IP. Empty values
+  # are filtered so an unset var.current_ip_address doesn't produce an
+  # invalid empty CIDR in the firewall rules.
+  key_vault_allowed_ips = distinct([
+    for ip in [local.configured_current_ip_address, local.detected_current_ip_address] :
+    ip if length(ip) > 0
+  ])
+
   use_bastion   = var.access_mode == "bastion"
   use_public_ip = var.access_mode == "public_ip"
 
