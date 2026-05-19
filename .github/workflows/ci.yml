@@ -1,0 +1,111 @@
+name: Terraform CI
+
+# Tier 1 + Tier 2 of the testing strategy:
+#   - Static checks (fmt, validate, tflint, trivy) on every push / PR
+#   - `terraform test` plan-only suite (no Azure credentials required;
+#     the tests under terraform/tests/ stub azurerm/azuread/http via
+#     mock_provider).
+#
+# A separate "apply" workflow that actually deploys into Azure (Tier 3)
+# is intentionally NOT included here -- add it later wired to a scratch
+# subscription with OIDC federation and a `workflow_dispatch` trigger.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+  pull-requests: read
+
+# Pin Terraform once so every job uses the same binary.
+env:
+  TF_VERSION: "1.15.0"
+  TF_IN_AUTOMATION: "true"
+  # Prevent the azurerm provider from looking for ARM_* env vars during
+  # `init -backend=false` / `validate` / `test` (which never touch Azure).
+  ARM_SKIP_PROVIDER_REGISTRATION: "true"
+
+jobs:
+  fmt:
+    name: terraform fmt
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+      - name: terraform fmt -check -recursive
+        run: terraform fmt -check -recursive
+
+  validate:
+    name: terraform validate
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: terraform
+    steps:
+      - uses: actions/checkout@v4
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+      - name: terraform init (no backend)
+        run: terraform init -backend=false
+      - name: terraform validate
+        run: terraform validate
+
+  tflint:
+    name: tflint
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: terraform
+    steps:
+      - uses: actions/checkout@v4
+      - uses: terraform-linters/setup-tflint@v4
+        with:
+          tflint_version: latest
+      - name: tflint --init
+        run: tflint --init --config ../.tflint.hcl
+        env:
+          # tflint downloads ruleset plugins from GitHub; the token avoids
+          # anonymous rate limits on busy days.
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: tflint
+        run: tflint --config ../.tflint.hcl --recursive
+
+  trivy:
+    name: trivy config scan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: trivy config
+        uses: aquasecurity/trivy-action@0.24.0
+        with:
+          scan-type: config
+          scan-ref: terraform
+          severity: HIGH,CRITICAL
+          # Advisory on first rollout -- flip to "1" once findings are
+          # triaged (expect: KV default-Allow firewall, files SA
+          # https_traffic_only=false which is required by NFSv4.1, and
+          # possibly min_tls_version defaults). Document accepted ones
+          # in .trivyignore at the repo root.
+          exit-code: "0"
+
+  test:
+    name: terraform test (plan-only)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: terraform
+    steps:
+      - uses: actions/checkout@v4
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+      - name: terraform init (no backend)
+        run: terraform init -backend=false
+      - name: terraform test
+        run: terraform test

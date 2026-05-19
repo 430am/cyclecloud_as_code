@@ -239,4 +239,5 @@ In-depth operator documentation lives in [docs/](docs/README.md):
 - [SSH private key](docs/ssh-key.md) — pulling the key from Key Vault and using it with `ssh` / `ssh-agent` / Bastion tunneling.
 - [Variables](docs/variables.md) — every input variable + the naming convention.
 - [Post-deploy](docs/post-deploy.md) — what the cloud-init bootstrap does, how to verify it, how to log in.
+- [Testing](docs/testing.md) — static checks, `terraform test`, and the planned end-to-end deploy suite.
 - [Known gaps / TODO](docs/known-gaps.md) — intentional rough edges (KV firewall, cluster automation, NSG coverage, etc.).

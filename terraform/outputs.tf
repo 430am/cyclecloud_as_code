@@ -100,3 +100,28 @@ output "nfs_shares" {
     }
   }
 }
+
+# Outputs below exist primarily so the locals they expose are assertable
+# from `terraform test` (see terraform/tests/). They're cheap to expose
+# and equally useful for operator inspection via `terraform output`.
+
+output "subnet_cidrs" {
+  description = "Computed CIDR for each subnet keyed by subnet name (AzureBastionSubnet only present when access_mode = \"bastion\")."
+  value       = local.subnets
+}
+
+output "effective_access_flags" {
+  description = "Resolved access-mode booleans derived from var.access_mode."
+  value = {
+    use_bastion   = local.use_bastion
+    use_public_ip = local.use_public_ip
+  }
+}
+
+output "naming_tokens" {
+  description = "Resolved naming tokens (kebab and compact) used as the leading segment of every resource name."
+  value = {
+    naming_token         = local.naming_token
+    naming_token_compact = local.naming_token_compact
+  }
+}

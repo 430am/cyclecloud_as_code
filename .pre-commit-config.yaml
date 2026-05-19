@@ -1,0 +1,43 @@
+# Pre-commit hooks for the cyclecloud_testing repo. Install once:
+#
+#   pip install pre-commit
+#   pre-commit install
+#
+# Then every `git commit` runs the hooks below on staged files. Run on
+# the whole repo at any time with:  pre-commit run --all-files
+#
+# Tier 1 of the testing strategy (see docs/testing.md if added later):
+# fast static checks only -- no Azure calls, no `terraform test`.
+
+repos:
+  - repo: https://github.com/antonbabenko/pre-commit-terraform
+    rev: v1.99.5
+    hooks:
+      # `terraform fmt -recursive` on staged .tf files.
+      - id: terraform_fmt
+
+      # `terraform validate` per directory containing .tf files. Uses
+      # `-backend=false` under the hood so no remote state is needed.
+      - id: terraform_validate
+
+      # tflint with the config at .tflint.hcl (azurerm plugin + naming).
+      - id: terraform_tflint
+        args:
+          - --args=--config=__GIT_WORKING_DIR__/.tflint.hcl
+
+      # Trivy security scan of Terraform configuration. Findings are
+      # advisory locally (exit 0) but enforced in CI.
+      - id: terraform_trivy
+        args:
+          - --args=--severity=HIGH,CRITICAL
+          - --args=--exit-code=0
+
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v5.0.0
+    hooks:
+      - id: end-of-file-fixer
+      - id: trailing-whitespace
+      - id: check-merge-conflict
+      - id: check-yaml
+      - id: check-added-large-files
+        args: ["--maxkb=500"]

@@ -12,6 +12,7 @@ five-line quickstart; deeper how-tos and reference material live here.
 | [ssh-key.md](ssh-key.md) | Pulling the generated SSH private key out of Key Vault and using it with `ssh` / `ssh-agent` / Bastion tunneling |
 | [variables.md](variables.md) | Reference for every input variable and the naming convention applied to each resource |
 | [post-deploy.md](post-deploy.md) | What the cloud-init bootstrap does, how to verify it finished, and how to log into the CycleCloud web UI |
+| [testing.md](testing.md) | How tests are organized (static checks, `terraform test`, planned E2E) and how to run them locally |
 | [known-gaps.md](known-gaps.md) | Intentional rough edges and TODOs (KV firewall posture, cluster automation, NSG coverage, etc.) |
 
 ## Conventions used in these docs
