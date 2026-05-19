@@ -5,7 +5,18 @@ data "cloudinit_config" "cyclecloud" {
   part {
     content_type = "text/cloud-config"
     filename     = "cloud-config.yaml"
-    content      = file("${path.module}/../scripts/cloud-config.yaml")
+    content = templatefile("${path.module}/../scripts/cloud-config.yaml.tftpl", {
+      admin_user             = var.vm_admin_username
+      key_vault_name         = azurerm_key_vault.cyclecloud.name
+      pwd_secret_name        = azurerm_key_vault_secret.cyclecloud_admin_password.name
+      pubkey_secret_name     = azurerm_key_vault_secret.public_key.name
+      resource_group_name    = azurerm_resource_group.testing.name
+      subscription_id        = data.azurerm_subscription.current.subscription_id
+      tenant_id              = data.azurerm_client_config.current.tenant_id
+      location               = var.location
+      storage_account_name   = azurerm_storage_account.locker.name
+      storage_container_name = azurerm_storage_container.cyclecloud_locker.name
+    })
   }
 }
 

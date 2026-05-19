@@ -123,4 +123,27 @@ resource "azurerm_private_endpoint" "linked_storage_table" {
     name                 = "${local.naming_token}-pdzg-linked-storage-table"
     private_dns_zone_ids = [azurerm_private_dns_zone.zones["privatelink.table.core.windows.net"].id]
   }
-} 
+}
+
+# Dedicated blob private endpoint for the CycleCloud locker storage account.
+# Keeps locker traffic on its own NIC / DNS entry rather than sharing the
+# monitoring SA's PE.
+resource "azurerm_private_endpoint" "locker_blob" {
+  location            = var.location
+  name                = "${local.naming_token}-pe-locker-blob"
+  resource_group_name = azurerm_resource_group.testing.name
+  subnet_id           = azurerm_subnet.cyclecloud["private_endpoint"].id
+  tags                = local.common_tags
+
+  private_service_connection {
+    is_manual_connection           = false
+    name                           = "${local.naming_token}-psc-locker-blob"
+    private_connection_resource_id = azurerm_storage_account.locker.id
+    subresource_names              = ["blob"]
+  }
+
+  private_dns_zone_group {
+    name                 = "${local.naming_token}-pdzg-locker-blob"
+    private_dns_zone_ids = [azurerm_private_dns_zone.zones["privatelink.blob.core.windows.net"].id]
+  }
+}

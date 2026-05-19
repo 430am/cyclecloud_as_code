@@ -17,15 +17,16 @@ for CycleCloud to manage compute resources in the same subscription.
 | [terraform/network.tf](terraform/network.tf) | VNet `10.150.0.0/16`, four subnets via `for_each` over `local.subnets`, NSG on the `server` subnet, NSG on `AzureBastionSubnet` (bastion mode only) |
 | [terraform/natgateway.tf](terraform/natgateway.tf) | NAT Gateway + public IP, attached to the `cluster` and `server` subnets |
 | [terraform/bastion.tf](terraform/bastion.tf) | Standard SKU Bastion with tunneling enabled (only when `access_mode = "bastion"`) |
-| [terraform/keyvault.tf](terraform/keyvault.tf) | RBAC-mode Key Vault holding an ephemeral ED25519 SSH key pair (write-only secrets), plus a `time_sleep` to wait for the caller's KV Administrator RBAC assignment to propagate before secrets are written |
+| [terraform/keyvault.tf](terraform/keyvault.tf) | RBAC-mode Key Vault holding an ephemeral ED25519 SSH key pair (write-only secrets) and an auto-generated CycleCloud web-UI admin password, plus a `time_sleep` to wait for the caller's KV Administrator RBAC assignment to propagate before secrets are written |
 | [terraform/ssh.tf](terraform/ssh.tf) | `ephemeral.tls_private_key` (ED25519) + `ephemeral.tls_public_key` — in-memory key pair that is never written to state; only the Key Vault secrets persist |
-| [terraform/monitoring.tf](terraform/monitoring.tf) | Log Analytics workspace, linked storage account (private-only), `azurerm_log_analytics_linked_storage_account`, diagnostic settings for Key Vault / VM / storage blob+table services |
-| [terraform/private_endpoints.tf](terraform/private_endpoints.tf) | Private DNS zones, VNet links, AMPLS scope + scoped service, PEs for Key Vault, storage (blob + table), AMPLS |
-| [terraform/cyclecloud.tf](terraform/cyclecloud.tf) | Ubuntu 24.04 managed OS disk built `FromImage`, NIC in `server` subnet, VM with `SystemAssigned + UserAssigned` identity, cloud-init from `scripts/cloud-config.yaml`, Azure Monitor Linux Agent (`AzureMonitorLinuxAgent`) VM extension; optional public IP + NSG on the NIC when `access_mode = "public_ip"` |
-| [terraform/roles.tf](terraform/roles.tf) | Custom **CycleCloud Orchestrator Role `<naming_token>`** (tenant-unique via the naming token), role assignment to the VM's system identity at subscription scope, Key Vault Administrator for caller, Storage Blob + Table Data Contributor for the LA workspace identity on the linked storage account |
+| [terraform/monitoring.tf](terraform/monitoring.tf) | Log Analytics workspace, linked storage account (private-only), `azurerm_log_analytics_linked_storage_account`, diagnostic settings for Key Vault / VM / monitoring storage blob+table services |
+| [terraform/locker.tf](terraform/locker.tf) | Dedicated CycleCloud locker storage account (LRS, RBAC-only, public network disabled) with a private `cyclecloud` blob container and diagnostic settings forwarded to the shared workspace — isolated from the monitoring SA so locker churn doesn't pollute diagnostic logs and the VM identity's blob-data RBAC stays scoped to one account |
+| [terraform/private_endpoints.tf](terraform/private_endpoints.tf) | Private DNS zones, VNet links, AMPLS scope + scoped service, PEs for Key Vault, monitoring storage (blob + table), locker storage (blob), AMPLS |
+| [terraform/cyclecloud.tf](terraform/cyclecloud.tf) | Ubuntu 24.04 managed OS disk built `FromImage`, NIC in `server` subnet, VM with `SystemAssigned + UserAssigned` identity, cloud-init rendered from [scripts/cloud-config.yaml.tftpl](scripts/cloud-config.yaml.tftpl) via `templatefile()`, Azure Monitor Linux Agent (`AzureMonitorLinuxAgent`) VM extension; optional public IP + NSG on the NIC when `access_mode = "public_ip"` |
+| [terraform/roles.tf](terraform/roles.tf) | Custom **CycleCloud Orchestrator Role `<naming_token>`** assigned to the VM identity at subscription scope, Key Vault Administrator for caller, Key Vault Secrets User + Storage Blob Data Contributor (scoped to the dedicated locker SA) for the VM identity, Storage Blob + Table Data Contributor for the LA workspace identity on the monitoring SA |
 | [terraform/locals.tf](terraform/locals.tf) | Subnet CIDR math via `cidrsubnet`, tag merging, DNS zone catalogs, `naming_token` / `naming_token_compact` (drive every resource name) |
 | [terraform/outputs.tf](terraform/outputs.tf) | Resource group, VM name/IP, Bastion name, Key Vault URI, etc. |
-| [scripts/cloud-config.yaml](scripts/cloud-config.yaml) | cloud-init: installs OpenJDK 8, Azure CLI, and `cyclecloud8` from Microsoft's apt repos |
+| [scripts/cloud-config.yaml.tftpl](scripts/cloud-config.yaml.tftpl) | cloud-init template: installs OpenJDK 8, Azure CLI, and `cyclecloud8`, then runs the Phase 2 bootstrap — fetches the admin password + public key from Key Vault via managed identity, drops `account_data.json` into `/opt/cycle_server/config/data/` to bypass the web wizard, installs the CycleCloud CLI, runs `cyclecloud initialize` + `cyclecloud account create` to register the subscription with MSI auth |
 
 ### Subnet layout
 
@@ -294,18 +295,60 @@ export ARM_CLIENT_SECRET=<sp-secret>
 the only value actually consumed from the tfvars file by the configuration is
 `current_ip_address`.
 
-## Post-deploy: configure CycleCloud
+## Post-deploy: CycleCloud is already configured
 
-cloud-init installs the `cyclecloud8` package but **does not configure** it.
-After the VM finishes provisioning (≈3–5 min), open the web UI via Bastion
-tunnel (above) and complete:
+The cloud-init bootstrap in
+[scripts/cloud-config.yaml.tftpl](scripts/cloud-config.yaml.tftpl) runs the
+full CycleCloud install end-to-end — there is **no web wizard to click
+through**. After `terraform apply` completes, the VM still needs ~5–10 minutes
+to finish:
 
-1. Site name + license acceptance
-2. Local admin account (CycleCloud-only, not an OS account)
-3. Paste your SSH public key under *My Profile → Edit Profile*
-4. Add the subscription (CycleCloud uses the VM's managed identity — the
-   custom **CycleCloud Orchestrator Role** is already assigned at subscription
-   scope by [terraform/roles.tf](terraform/roles.tf))
+1. `cyclecloud8` package install
+2. `await_startup` (CycleCloud web app comes online)
+3. Managed-identity login + Key Vault secret fetch
+4. Drop `account_data.json` into `/opt/cycle_server/config/data/` (skips the
+   site name / EULA / admin-account wizard; CycleCloud renames it to
+   `*.imported` once processed)
+5. `cyclecloud initialize --batch --url=https://localhost/ ...`
+6. `cyclecloud account create -f azure_data.json` (registers the subscription
+   using `AzureRMUseManagedIdentity: true`, with the locker storage account
+   and `cyclecloud` container already provisioned by Terraform)
+
+### Verifying the bootstrap finished
+
+SSH into the VM (see [SSH private key](#ssh-private-key-both-modes) below)
+and watch cloud-init complete:
+
+```bash
+sudo cloud-init status --wait                          # blocks until done
+sudo grep -E 'CycleCloud|cyclecloud' /var/log/cloud-init-output.log | tail -40
+ls /opt/cycle_server/config/data/account_data.json.imported   # should exist
+sudo -u cyclecloudadmin /usr/local/bin/cyclecloud locker list # should list the configured account
+```
+
+### Logging into the web UI
+
+The admin username is `var.vm_admin_username` (default `cyclecloudadmin`).
+The password was generated by Terraform and stored write-only in Key Vault:
+
+```bash
+cd terraform
+az keyvault secret show \
+  --vault-name "$(terraform output -raw key_vault_name)" \
+  --name      "$(terraform output -raw cyclecloud_admin_password_secret_name)" \
+  --query value -o tsv
+```
+
+Open the web UI per the mode you deployed in (`https://localhost:8443` after
+the Bastion tunnel, or `https://<public-ip>:8080` directly) and sign in with
+those credentials. The subscription should already be listed under
+**Settings → Subscriptions** — if it is, the bootstrap finished cleanly and
+you can go straight to creating a cluster.
+
+> If `Settings → Subscriptions` is empty, the `cyclecloud account create` step
+> failed (usually a transient RBAC propagation race). Inspect
+> `/var/log/cloud-init-output.log` on the VM, then re-run the command by hand:
+> `runuser -l cyclecloudadmin -c "cyclecloud account create -f ~/azure_data.json"`.
 
 ## Known gaps / TODO
 
@@ -329,9 +372,13 @@ them up as needed:
   upgrade is enabled, so the agent itself is current regardless.
 - **CycleCloud Insiders / version pinning.** The cloud-init pulls
   `cyclecloud stable main`; no version pin.
-- **No automation of the web setup wizard.** Could be replaced with
-  `cyclecloud initialize` + `cyclecloud account create` in cloud-init once the
-  VM identity is reachable from the server CLI.
+- **No automation of cluster creation (Phase 3).** Phase 2 (this repo) ends
+  with the subscription registered. Adding
+  `cyclecloud create_cluster <Template> <Name> -p params.json` +
+  `cyclecloud start_cluster` to the cloud-init `runcmd` (and polling
+  `cyclecloud show_nodes scheduler --states=Started`) would extend this to a
+  full one-shot SLURM/PBS deployment — see the marconetto/azadventures
+  chapter11 script for the pattern.
 - **Single subscription.** Earlier scaffolding referenced aliased
   `workload_subscription` / `hub_subscription` providers; the current config is
   single-subscription. If a hub/spoke split is needed, re-introduce those

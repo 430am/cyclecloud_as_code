@@ -53,6 +53,21 @@ output "ssh_private_key_secret_name" {
   value       = azurerm_key_vault_secret.private_key.name
 }
 
+output "cyclecloud_admin_password_secret_name" {
+  description = "Name of the Key Vault secret holding the auto-generated CycleCloud web-UI admin password."
+  value       = azurerm_key_vault_secret.cyclecloud_admin_password.name
+}
+
+output "cyclecloud_locker_storage_account" {
+  description = "Dedicated storage account used by CycleCloud as its project / template locker (separate from the monitoring SA)."
+  value       = azurerm_storage_account.locker.name
+}
+
+output "cyclecloud_locker_container" {
+  description = "Blob container inside the locker storage account."
+  value       = azurerm_storage_container.cyclecloud_locker.name
+}
+
 output "log_analytics_workspace_id" {
   description = "Resource ID of the Log Analytics workspace."
   value       = azurerm_log_analytics_workspace.monitoring.id

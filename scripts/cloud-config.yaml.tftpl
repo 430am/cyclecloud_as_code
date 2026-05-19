@@ -1,0 +1,146 @@
+#cloud-config
+
+package_update: true
+package_upgrade: true
+packages:
+  - curl
+  - gnupg2
+  - lsb-release
+  - apt-transport-https
+  - ca-certificates
+  - openjdk-8-jdk
+  - unzip
+  - python3-venv
+  - jq
+
+# Render Terraform-driven config files onto the VM before runcmd executes.
+# Secrets are NOT inlined here -- they are pulled from Key Vault at runtime
+# by the managed identity, then sed-substituted into account_data.json.
+write_files:
+  - path: /tmp/cyclecloud/account_data.json
+    permissions: "0600"
+    owner: root:root
+    content: |
+      [
+        {
+          "AdType": "Application.Setting",
+          "Name": "cycleserver.installation.initial_user",
+          "Value": "${admin_user}"
+        },
+        {
+          "AdType": "AuthenticatedUser",
+          "Name": "${admin_user}",
+          "RawPassword": "__CCPASSWORD__",
+          "Superuser": true
+        },
+        {
+          "AdType": "Credential",
+          "CredentialType": "PublicKey",
+          "Name": "${admin_user}/public",
+          "PublicKey": "__CCPUBKEY__"
+        },
+        {
+          "AdType": "Application.Setting",
+          "Name": "cycleserver.installation.complete",
+          "Value": true
+        }
+      ]
+
+  - path: /tmp/cyclecloud/azure_data.json
+    permissions: "0644"
+    owner: root:root
+    content: |
+      {
+        "Environment": "public",
+        "AzureRMUseManagedIdentity": true,
+        "AzureResourceGroup": "${resource_group_name}",
+        "AzureRMApplicationId": " ",
+        "AzureRMApplicationSecret": " ",
+        "AzureRMSubscriptionId": "${subscription_id}",
+        "AzureRMTenantId": "${tenant_id}",
+        "DefaultAccount": true,
+        "Location": "${location}",
+        "Name": "azure",
+        "Provider": "azure",
+        "ProviderId": "${subscription_id}",
+        "RMStorageAccount": "${storage_account_name}",
+        "RMStorageContainer": "${storage_container_name}",
+        "AcceptMarketplaceTerms": true
+      }
+
+runcmd:
+  # ----- Base install: Java 8 + Azure CLI + CycleCloud -----------------------
+  - update-alternatives --set java /usr/lib/jvm/java-8-openjdk-amd64/jre/bin/java
+
+  - install -d -m 0755 /etc/apt/keyrings
+  - curl -fsSL https://packages.microsoft.com/keys/microsoft.asc | gpg --dearmor -o /etc/apt/keyrings/microsoft.gpg
+  - chmod go+r /etc/apt/keyrings/microsoft.gpg
+
+  - |
+    AZ_DIST=$(lsb_release -cs)
+    cat <<EOF > /etc/apt/sources.list.d/azure-cli.sources
+    Types: deb
+    URIs: https://packages.microsoft.com/repos/azure-cli/
+    Suites: $${AZ_DIST}
+    Components: main
+    Architectures: $(dpkg --print-architecture)
+    Signed-by: /etc/apt/keyrings/microsoft.gpg
+    EOF
+
+  - echo "deb [signed-by=/etc/apt/keyrings/microsoft.gpg] https://packages.microsoft.com/repos/cyclecloud stable main" > /etc/apt/sources.list.d/cyclecloud.list
+
+  - apt-get -qq update
+  - DEBIAN_FRONTEND=noninteractive apt-get -y install azure-cli cyclecloud8
+
+  # ----- Phase 2: skip the web wizard, register the subscription -------------
+  # Wait until the CycleCloud web app responds (cyclecloud8 starts the service
+  # automatically, but it needs ~30-120s to become ready).
+  - /opt/cycle_server/cycle_server await_startup
+
+  # Authenticate the VM's managed identity to ARM, then pull the admin
+  # password + SSH public key from Key Vault. The KV firewall denies public
+  # traffic; the VM reaches it via the private endpoint in private_endpoints.tf.
+  - az login --identity --allow-no-subscriptions
+  - CCPASSWORD=$(az keyvault secret show --vault-name "${key_vault_name}" --name "${pwd_secret_name}"    --query value -o tsv)
+  - CCPUBKEY=$(az keyvault secret show   --vault-name "${key_vault_name}" --name "${pubkey_secret_name}" --query value -o tsv)
+
+  # Substitute placeholders into account_data.json. Use a delimiter that
+  # cannot appear in passwords/keys (|) and disable interpretation of & / \.
+  - |
+    python3 - <<'PY'
+    import json, os
+    with open('/tmp/cyclecloud/account_data.json') as f:
+        text = f.read()
+    text = text.replace('__CCPASSWORD__', os.environ['CCPASSWORD'])
+    text = text.replace('__CCPUBKEY__',   os.environ['CCPUBKEY'])
+    # Validate JSON before writing
+    json.loads(text)
+    with open('/tmp/cyclecloud/account_data.json', 'w') as f:
+        f.write(text)
+    PY
+    env CCPASSWORD="$CCPASSWORD" CCPUBKEY="$CCPUBKEY" true
+
+  # Hand the file to CycleCloud's import loop. The file is renamed to
+  # .imported once processed (typically within a few seconds).
+  - install -m 0640 -o cycle_server -g cycle_server /tmp/cyclecloud/account_data.json /opt/cycle_server/config/data/account_data.json
+  - |
+    for i in $(seq 1 60); do
+      [ -f /opt/cycle_server/config/data/account_data.json.imported ] && break
+      sleep 2
+    done
+
+  # ----- Install the CycleCloud CLI (bundled with the server) ---------------
+  - unzip -o /opt/cycle_server/tools/cyclecloud-cli.zip -d /tmp/cyclecloud
+  - python3 /tmp/cyclecloud/cyclecloud-cli-installer/install.py -y --system --installdir /opt/cycle_server/.cycle
+
+  # ----- Initialize the CLI for the admin user, then register the sub -------
+  - |
+    runuser -l ${admin_user} -c "/usr/local/bin/cyclecloud initialize --batch \
+        --url=https://localhost/ --verify-ssl=false \
+        --username='${admin_user}' --password='$CCPASSWORD'"
+  - install -m 0644 -o ${admin_user} -g ${admin_user} /tmp/cyclecloud/azure_data.json /home/${admin_user}/azure_data.json
+  - runuser -l ${admin_user} -c "/usr/local/bin/cyclecloud account create -f /home/${admin_user}/azure_data.json"
+
+  # ----- Cleanup: scrub the secrets we materialized on disk -----------------
+  - shred -u /tmp/cyclecloud/account_data.json /home/${admin_user}/azure_data.json || true
+  - unset CCPASSWORD CCPUBKEY

@@ -98,3 +98,20 @@ resource "azurerm_role_assignment" "monitoring" {
   role_definition_name = each.key
   scope                = azurerm_storage_account.monitoring.id
 }
+
+# CycleCloud VM's system-assigned identity needs to:
+#   1. Read its admin password + public key from Key Vault at first boot (the
+#      cloud-init bootstrap fetches both via `az keyvault secret show`).
+#   2. Read/write blobs in the locker storage account to upload cluster
+#      templates and CycleCloud projects.
+resource "azurerm_role_assignment" "cyclecloud_kv_secrets_user" {
+  principal_id         = azurerm_linux_virtual_machine.cyclecloud.identity[0].principal_id
+  scope                = azurerm_key_vault.cyclecloud.id
+  role_definition_name = "Key Vault Secrets User"
+}
+
+resource "azurerm_role_assignment" "cyclecloud_locker_blob" {
+  principal_id         = azurerm_linux_virtual_machine.cyclecloud.identity[0].principal_id
+  scope                = azurerm_storage_account.locker.id
+  role_definition_name = "Storage Blob Data Contributor"
+}
