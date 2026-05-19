@@ -23,7 +23,7 @@ VM still needs ~5–10 minutes to finish:
 5. Drop `account_data.json` into `/opt/cycle_server/config/data/` (skips the
    site name / EULA / admin-account wizard; CycleCloud renames it to
    `*.imported` once processed)
-6. `cyclecloud initialize --batch --url=https://localhost/ ...`
+6. `cyclecloud initialize --batch --url=https://localhost:8443/ ...`
 7. `cyclecloud account create -f azure_data.json` (registers the
    subscription using `AzureRMUseManagedIdentity: true`, with the locker
    storage account and `cyclecloud` container already provisioned by

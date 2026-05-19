@@ -40,13 +40,13 @@ resource "azurerm_network_security_group" "server" {
   }
 
   security_rule {
-    name                       = "allow-https-from-vnet"
+    name                       = "allow-cyclecloud-https-from-vnet"
     priority                   = 110
     direction                  = "Inbound"
     access                     = "Allow"
     protocol                   = "Tcp"
     source_port_range          = "*"
-    destination_port_range     = "443"
+    destination_port_range     = "8443"
     source_address_prefix      = "VirtualNetwork"
     destination_address_prefix = "VirtualNetwork"
   }

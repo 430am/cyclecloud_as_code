@@ -4,7 +4,7 @@ Intentional rough edges. Pick them up as needed.
 
 ## NSG coverage is partial
 
-The `server` subnet has an NSG (allow 22/443/8080 from `VirtualNetwork`,
+The `server` subnet has an NSG (allow 22/8080/8443 from `VirtualNetwork`,
 default deny otherwise) and `AzureBastionSubnet` has the Bastion-required
 ruleset when `access_mode = "bastion"`. The `cluster` and `private_endpoint`
 subnets still rely on the Azure default rules. In `public_ip` mode the VM
