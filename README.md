@@ -206,9 +206,10 @@ The five-line happy path. Each step links to the doc that explains it:
 # 1. Prereqs: Terraform ~> 1.15, Azure CLI logged in, Owner on the sub
 #    -> docs/prerequisites.md
 git clone git@github.com:430am/cyclecloud_testing.git && cd cyclecloud_testing
+cd terraform
 cp environments/example.tfvars.hcl environments/local.tfvars.hcl    # edit current_ip_address
 export ARM_SUBSCRIPTION_ID=<your-sub-id> && az login
-cd terraform && terraform init && terraform apply -var-file=../environments/local.tfvars.hcl
+terraform init && terraform apply -var-file=environments/local.tfvars.hcl
 ```
 
 Then wait ~5–10 min for the cloud-init bootstrap to finish on the VM and

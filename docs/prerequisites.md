@@ -45,7 +45,7 @@ export ARM_CLIENT_ID=<sp-app-id>
 export ARM_CLIENT_SECRET=<sp-secret>
 ```
 
-[environments/example.tfvars.hcl](../environments/example.tfvars.hcl) lists
+[terraform/environments/example.tfvars.hcl](../terraform/environments/example.tfvars.hcl) lists
 these `ARM_*` names as a copy-paste reference for the variables you need to
 export; the only value actually consumed from the tfvars file by the
 configuration is `current_ip_address`.

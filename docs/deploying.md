@@ -46,15 +46,15 @@ changed, then `terraform plan` to see whether anything needs to be applied.
 cd terraform
 
 # 1. Author your tfvars (do not commit)
-cp ../environments/example.tfvars.hcl ../environments/local.tfvars.hcl
+cp environments/example.tfvars.hcl environments/local.tfvars.hcl
 # edit current_ip_address (must be a valid IPv4, e.g. "203.0.113.10")
 
 # 2. Auth + plan
 export ARM_SUBSCRIPTION_ID=<your-sub-id>
 az login
 terraform init
-terraform plan  -var-file=../environments/local.tfvars.hcl
-terraform apply -var-file=../environments/local.tfvars.hcl
+terraform plan  -var-file=environments/local.tfvars.hcl
+terraform apply -var-file=environments/local.tfvars.hcl
 ```
 
 Outputs (see [terraform/outputs.tf](../terraform/outputs.tf)) include the
