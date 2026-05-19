@@ -69,3 +69,40 @@ you can go straight to creating a cluster.
 > `/var/log/cloud-init-output.log` on the VM, then re-run the command by
 > hand:
 > `runuser -l cyclecloudadmin -c "cyclecloud account create -f ~/azure_data.json"`.
+
+## Mounting the NFS shares (sched + shared)
+
+[terraform/files.tf](../terraform/files.tf) provisions a Premium FileStorage
+account with two NFSv4.1 shares — `sched` (downstream Slurm scheduler
+state) and `shared` (cluster-wide shared data) — reachable over port 2049
+from any NIC in the `server` or `cluster` subnets via the file private
+endpoint. The shares are sized at the Premium **100 GiB minimum quota**
+(the dev intent was ~10 GiB each but Azure rejects anything smaller).
+
+NFSv4.1 on Azure Files does **not** use account keys or SAS — access is
+gated by network reachability (PE + VNet) and POSIX permissions inside
+the share once mounted. There is nothing to fetch from Key Vault for this.
+
+From the CycleCloud VM (or any future cluster node in the `cluster`
+subnet):
+
+```bash
+sudo apt-get install -y nfs-common
+
+SA=$(cd terraform && terraform output -raw nfs_storage_account)
+sudo mkdir -p /sched /shared
+sudo mount -t nfs -o vers=4,minorversion=1,sec=sys "${SA}.file.core.windows.net:/${SA}/sched"  /sched
+sudo mount -t nfs -o vers=4,minorversion=1,sec=sys "${SA}.file.core.windows.net:/${SA}/shared" /shared
+```
+
+`terraform output nfs_shares` prints the exact `mount_fqdn` /
+`mount_point` for each share if you'd rather copy-paste than interpolate.
+
+For persistent mounts on cluster nodes, render the same two lines into
+`/etc/fstab` with `_netdev,nofail` so the boot doesn't hang if the PE is
+briefly unreachable:
+
+```fstab
+<sa>.file.core.windows.net:/<sa>/sched   /sched   nfs   vers=4,minorversion=1,sec=sys,_netdev,nofail   0 0
+<sa>.file.core.windows.net:/<sa>/shared  /shared  nfs   vers=4,minorversion=1,sec=sys,_netdev,nofail   0 0
+```

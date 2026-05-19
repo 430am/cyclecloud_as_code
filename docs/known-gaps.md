@@ -37,6 +37,16 @@ Called on every plan / apply / destroy. Air-gapped or restricted-egress
 runners will fail there; swap to a known-static IP or short-circuit the
 data source when that matters.
 
+## NFS share quota is 100 GiB, not 10 GiB
+
+The two NFSv4.1 shares in [terraform/files.tf](../terraform/files.tf)
+(`sched`, `shared`) were originally requested at 10 GiB each but are
+provisioned at 100 GiB. Premium FileStorage (the only tier that supports
+NFS on Azure Files) enforces a hard 100 GiB minimum per share; smaller
+quotas are rejected with `InvalidShareQuota`. For this dev environment
+the extra capacity is cheap noise; revisit if cost matters or if Azure
+ever lifts the floor.
+
 ## CycleCloud Insiders / version pinning
 
 The cloud-init pulls `cyclecloud stable main`; no version pin.

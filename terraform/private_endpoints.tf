@@ -147,3 +147,33 @@ resource "azurerm_private_endpoint" "locker_blob" {
     private_dns_zone_ids = [azurerm_private_dns_zone.zones["privatelink.blob.core.windows.net"].id]
   }
 }
+
+# Private endpoint for the Premium FileStorage account hosting the NFSv4.1
+# shares (see files.tf). A single PE on the `file` subresource serves every
+# share on the storage account, so this one endpoint covers both `sched`
+# and `shared`. Reachability:
+#   - server subnet: server-NSG inbound rules don't affect outbound; default
+#     allow-VNet-outbound lets the CycleCloud VM reach the PE NIC on 2049.
+#   - cluster subnet: no NSG attached, default allow.
+#   - private_endpoint subnet: no NSG attached.
+# So no NSG changes are required for the shares to be mountable from the
+# server or cluster subnets.
+resource "azurerm_private_endpoint" "files" {
+  location            = var.location
+  name                = "${local.naming_token}-pe-files"
+  resource_group_name = azurerm_resource_group.testing.name
+  subnet_id           = azurerm_subnet.cyclecloud["private_endpoint"].id
+  tags                = local.common_tags
+
+  private_service_connection {
+    is_manual_connection           = false
+    name                           = "${local.naming_token}-psc-files"
+    private_connection_resource_id = azurerm_storage_account.files.id
+    subresource_names              = ["file"]
+  }
+
+  private_dns_zone_group {
+    name                 = "${local.naming_token}-pdzg-files"
+    private_dns_zone_ids = [azurerm_private_dns_zone.zones["privatelink.file.core.windows.net"].id]
+  }
+}

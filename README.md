@@ -21,7 +21,8 @@ for CycleCloud to manage compute resources in the same subscription.
 | [terraform/ssh.tf](terraform/ssh.tf) | `ephemeral.tls_private_key` (ED25519) + `ephemeral.tls_public_key` — in-memory key pair that is never written to state; only the Key Vault secrets persist |
 | [terraform/monitoring.tf](terraform/monitoring.tf) | Log Analytics workspace, linked storage account (private-only), `azurerm_log_analytics_linked_storage_account`, diagnostic settings for Key Vault / VM / monitoring storage blob+table services |
 | [terraform/locker.tf](terraform/locker.tf) | Dedicated CycleCloud locker storage account (LRS, RBAC-only, public network disabled) with a private `cyclecloud` blob container and diagnostic settings forwarded to the shared workspace — isolated from the monitoring SA so locker churn doesn't pollute diagnostic logs and the VM identity's blob-data RBAC stays scoped to one account |
-| [terraform/private_endpoints.tf](terraform/private_endpoints.tf) | Private DNS zones, VNet links, AMPLS scope + scoped service, PEs for Key Vault, monitoring storage (blob + table), locker storage (blob), AMPLS |
+| [terraform/files.tf](terraform/files.tf) | Premium FileStorage account hosting two NFSv4.1 shares (`sched`, `shared`) for downstream Slurm scheduler state and cluster-wide shared data. Public network disabled, shared-access keys disabled (NFSv4.1 doesn't use them), HTTPS-only disabled (NFS is not HTTPS). Shares are provisioned at the Premium 100 GiB minimum quota (the dev-environment intent is ~10 GiB each). Reached over port 2049 via the file PE in private_endpoints.tf |
+| [terraform/private_endpoints.tf](terraform/private_endpoints.tf) | Private DNS zones, VNet links, AMPLS scope + scoped service, PEs for Key Vault, monitoring storage (blob + table), locker storage (blob), NFS file storage (file), AMPLS |
 | [terraform/cyclecloud.tf](terraform/cyclecloud.tf) | Ubuntu 24.04 managed OS disk built `FromImage`, NIC in `server` subnet, VM with `SystemAssigned + UserAssigned` identity, cloud-init rendered from [scripts/cloud-config.yaml.tftpl](scripts/cloud-config.yaml.tftpl) via `templatefile()`, Azure Monitor Linux Agent (`AzureMonitorLinuxAgent`) VM extension, boot diagnostics on Azure-managed storage; optional public IP + NSG on the NIC when `access_mode = "public_ip"` |
 | [terraform/roles.tf](terraform/roles.tf) | Custom **CycleCloud Orchestrator Role `<naming_token>`** assigned at subscription scope to **both** the VM's system-assigned identity and the user-assigned identity (`azurerm_user_assigned_identity.cyclecloud`, attached to the VM and reserved for cluster-node use). Key Vault Administrator for caller, Key Vault Secrets User + Storage Blob Data Contributor (scoped to the dedicated locker SA) for the VM identity, Storage Blob + Table Data Contributor for the LA workspace identity on the monitoring SA |
 | [terraform/locals.tf](terraform/locals.tf) | Subnet CIDR math via `cidrsubnet`, tag merging, DNS zone catalogs, `naming_token` / `naming_token_compact` (drive every resource name) |
@@ -83,6 +84,14 @@ flowchart LR
                 stLocker --- ccContainer
             end
 
+            subgraph NFS["CycleCloud NFS Files"]
+                stFiles[("Storage Account<br/>files (Premium FileStorage, LRS)<br/>public access: disabled<br/>shared keys: disabled")]
+                shSched["NFSv4.1 share:<br/>sched (100 GiB)"]
+                shShared["NFSv4.1 share:<br/>shared (100 GiB)"]
+                stFiles --- shSched
+                stFiles --- shShared
+            end
+
             subgraph VNET["VNet 10.150.0.0/16"]
                 direction TB
 
@@ -103,6 +112,7 @@ flowchart LR
                     peMonBlob["PE → monitoring blob"]
                     peMonTbl["PE → monitoring table"]
                     peLocker["PE → locker blob"]
+                    peFiles["PE → files (NFSv4.1)"]
                     peAmpls["PE → AMPLS"]
                 end
 
@@ -110,7 +120,7 @@ flowchart LR
                     bastion["Azure Bastion<br/>(Standard, tunneling)"]
                 end
 
-                pdns["Private DNS zones<br/>(vaultcore / blob / table /<br/>monitor / ods / oms / agentsvc)"]
+                pdns["Private DNS zones<br/>(vaultcore / blob / file / table /<br/>monitor / ods / oms / agentsvc)"]
             end
 
             nat["NAT Gateway<br/>+ Public IP"]
@@ -136,6 +146,8 @@ flowchart LR
     %% the KV firewall is currently default-Allow, see Known gaps)
     vm -- "MI: get secrets" --> peKv --> kv
     vm -- "MI: blob R/W (locker)" --> peLocker --> stLocker
+    vm -- "NFSv4.1 mount (2049)" --> peFiles --> stFiles
+    SNCluster -. "NFSv4.1 mount (2049)<br/>future compute nodes" .-> peFiles
     vm -- "AMA logs/metrics" --> peAmpls --> ampls
     stMon -. PE .- peMonBlob
     stMon -. PE .- peMonTbl
@@ -143,6 +155,7 @@ flowchart LR
     pdns -. resolves .- peMonBlob
     pdns -. resolves .- peMonTbl
     pdns -. resolves .- peLocker
+    pdns -. resolves .- peFiles
     pdns -. resolves .- peAmpls
 
     %% KV firewall is default-Allow today, so the operator's data-plane calls
@@ -162,6 +175,7 @@ flowchart LR
     vm      -. diag .-> la
     stMon   -. diag .-> la
     stLocker -. diag .-> la
+    stFiles -. diag .-> la
 
     classDef cond stroke-dasharray: 4 3,stroke:#888;
     class bastion,pipBas,SNBas,pipVm,nsgNic cond;

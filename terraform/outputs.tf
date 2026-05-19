@@ -77,3 +77,26 @@ output "cyclecloud_orchestrator_role_name" {
   description = "Custom role granted to the CycleCloud VM system-assigned identity at subscription scope."
   value       = azurerm_role_definition.cyclecloud.name
 }
+
+output "nfs_storage_account" {
+  description = "Premium FileStorage account hosting the NFSv4.1 shares for Slurm scheduler state and cluster-wide shared data."
+  value       = azurerm_storage_account.files.name
+}
+
+output "nfs_shares" {
+  description = "NFSv4.1 share names on nfs_storage_account, and the FQDN used to mount them (resolved via private DNS to the file PE)."
+  value = {
+    sched = {
+      name        = azurerm_storage_share.sched.name
+      quota_gib   = azurerm_storage_share.sched.quota
+      mount_fqdn  = "${azurerm_storage_account.files.name}.file.core.windows.net"
+      mount_point = "/${azurerm_storage_account.files.name}/${azurerm_storage_share.sched.name}"
+    }
+    shared = {
+      name        = azurerm_storage_share.shared.name
+      quota_gib   = azurerm_storage_share.shared.quota
+      mount_fqdn  = "${azurerm_storage_account.files.name}.file.core.windows.net"
+      mount_point = "/${azurerm_storage_account.files.name}/${azurerm_storage_share.shared.name}"
+    }
+  }
+}
