@@ -80,56 +80,12 @@ resource "azurerm_network_interface_security_group_association" "cyclecloud" {
   network_security_group_id = azurerm_network_security_group.cyclecloud[0].id
 }
 
-# In public_ip mode the VM is reached over the Internet, but the `server`
-# subnet NSG (network.tf) only allows 22/8080/8443 from `VirtualNetwork`.
-# Both the subnet NSG and the NIC NSG must Allow the flow — either deny wins
-# — so without these rules the NIC NSG's caller-IP rules are effectively
-# blackholed by the subnet NSG. Add matching subnet-level Allow rules so the
-# NIC NSG actually takes effect.
-resource "azurerm_network_security_rule" "server_allow_caller_ssh" {
-  count                       = local.use_public_ip ? 1 : 0
-  name                        = "allow-ssh-from-caller"
-  priority                    = 200
-  direction                   = "Inbound"
-  access                      = "Allow"
-  protocol                    = "Tcp"
-  source_port_range           = "*"
-  destination_port_range      = "22"
-  source_address_prefix       = local.configured_current_ip_address
-  destination_address_prefix  = "*"
-  resource_group_name         = azurerm_resource_group.testing.name
-  network_security_group_name = azurerm_network_security_group.server.name
-}
-
-resource "azurerm_network_security_rule" "server_allow_caller_https" {
-  count                       = local.use_public_ip ? 1 : 0
-  name                        = "allow-cyclecloud-https-from-caller"
-  priority                    = 210
-  direction                   = "Inbound"
-  access                      = "Allow"
-  protocol                    = "Tcp"
-  source_port_range           = "*"
-  destination_port_range      = "8443"
-  source_address_prefix       = local.configured_current_ip_address
-  destination_address_prefix  = "*"
-  resource_group_name         = azurerm_resource_group.testing.name
-  network_security_group_name = azurerm_network_security_group.server.name
-}
-
-resource "azurerm_network_security_rule" "server_allow_caller_8080" {
-  count                       = local.use_public_ip ? 1 : 0
-  name                        = "allow-8080-from-caller"
-  priority                    = 220
-  direction                   = "Inbound"
-  access                      = "Allow"
-  protocol                    = "Tcp"
-  source_port_range           = "*"
-  destination_port_range      = "8080"
-  source_address_prefix       = local.configured_current_ip_address
-  destination_address_prefix  = "*"
-  resource_group_name         = azurerm_resource_group.testing.name
-  network_security_group_name = azurerm_network_security_group.server.name
-}
+# Note: the matching subnet-level caller rules live inline on
+# azurerm_network_security_group.server (network.tf) via a `dynamic`
+# block keyed off local.use_public_ip. They cannot be declared as
+# standalone azurerm_network_security_rule resources here because the
+# azurerm provider does not support mixing the two on the same NSG --
+# the inline set would silently delete them on every reconciliation.
 
 resource "azurerm_network_interface" "cyclecloud" {
   location            = var.location

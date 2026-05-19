@@ -63,4 +63,24 @@ locals {
     },
     local.use_bastion ? { AzureBastionSubnet = local.bastion_subnet } : {}
   )
+
+  # Rule set for the `server` subnet NSG. Always includes the three
+  # intra-VNet allow rules; in public_ip mode also includes matching
+  # caller-IP allows so the NIC NSG's Internet-facing rules aren't
+  # blackholed at the subnet level. Consumed by the `dynamic` block on
+  # azurerm_network_security_group.server in network.tf -- see that
+  # resource for why the rules cannot live in standalone
+  # azurerm_network_security_rule resources.
+  server_nsg_rules = concat(
+    [
+      { name = "allow-vnet-inbound", priority = 100, port = "22", source = "VirtualNetwork", destination = "VirtualNetwork" },
+      { name = "allow-cyclecloud-https-from-vnet", priority = 110, port = "8443", source = "VirtualNetwork", destination = "VirtualNetwork" },
+      { name = "allow-8080-from-vnet", priority = 120, port = "8080", source = "VirtualNetwork", destination = "VirtualNetwork" },
+    ],
+    local.use_public_ip ? [
+      { name = "allow-ssh-from-caller", priority = 200, port = "22", source = local.configured_current_ip_address, destination = "*" },
+      { name = "allow-cyclecloud-https-from-caller", priority = 210, port = "8443", source = local.configured_current_ip_address, destination = "*" },
+      { name = "allow-8080-from-caller", priority = 220, port = "8080", source = local.configured_current_ip_address, destination = "*" },
+    ] : []
+  )
 }

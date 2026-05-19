@@ -139,12 +139,43 @@ runcmd:
     PY
 
     # Hand the file to CycleCloud's import loop. The file is renamed to
-    # .imported once processed (typically within a few seconds).
+    # .imported once processed (typically within a few seconds). Fail hard
+    # if the rename never happens -- otherwise `cyclecloud initialize` will
+    # run before the admin user exists and produce a confusing 401/404.
     install -m 0640 -o cycle_server -g cycle_server /tmp/cyclecloud/account_data.json /opt/cycle_server/config/data/account_data.json
+    imported=0
     for i in $(seq 1 60); do
-      [ -f /opt/cycle_server/config/data/account_data.json.imported ] && break
+      if [ -f /opt/cycle_server/config/data/account_data.json.imported ]; then
+        imported=1
+        break
+      fi
       sleep 2
     done
+    if [ "$imported" -ne 1 ]; then
+      echo "ERROR: account_data.json was not imported by cycle_server within 120s" >&2
+      ls -la /opt/cycle_server/config/data/ >&2 || true
+      exit 1
+    fi
+
+    # `await_startup` returns once the JVM/web container is listening, but
+    # the application layer (REST endpoints under /ui, account import) needs
+    # more time to come online -- if we hit it too early `cyclecloud
+    # initialize` errors with `Failed to get metadata endpoint
+    # http://localhost:8080/ui/metadata, status code 404`. Poll until the
+    # metadata endpoint returns 200 before continuing.
+    metadata_ready=0
+    for i in $(seq 1 90); do
+      code=$(curl -s -o /dev/null -w "%%{http_code}" http://localhost:8080/ui/metadata || echo "000")
+      if [ "$code" = "200" ]; then
+        metadata_ready=1
+        break
+      fi
+      sleep 2
+    done
+    if [ "$metadata_ready" -ne 1 ]; then
+      echo "ERROR: /ui/metadata not ready after 180s (last HTTP code=$code)" >&2
+      exit 1
+    fi
 
     # Initialize the CLI for the admin user, then register the subscription.
     # CycleCloud 8 listens on HTTP **8080** by default. Port 8443 (HTTPS) is
