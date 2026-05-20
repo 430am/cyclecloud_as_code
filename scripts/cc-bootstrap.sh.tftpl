@@ -125,9 +125,12 @@ fi
 # CycleCloud 8 on Ubuntu (cyclecloud8 apt package) listens on HTTP 8080 only;
 # port 8443 (HTTPS) requires a TLS keystore that ships only with the
 # Marketplace image. Bootstrapping over loopback HTTP keeps traffic on the VM.
+#
+# NOTE: no trailing slash on --url. The CLI appends paths like /ui/metadata
+# directly, so a trailing slash yields http://host:8080//ui/metadata -> 404.
 log "stage 5: cyclecloud initialize"
 runuser -l "$ADMIN_USER" -c "/usr/local/bin/cyclecloud initialize --batch \
-    --url=http://localhost:8080/ \
+    --url=http://localhost:8080 \
     --username='$ADMIN_USER' --password='$CCPASSWORD'"
 
 # -------- Stage 6: register the Azure subscription as the default account ----
