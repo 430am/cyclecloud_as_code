@@ -1,0 +1,14 @@
+# Every file requires an approving review from the listed owner(s) before
+# a PR targeting a protected branch (currently `main`) can be merged.
+# Combined with "Require review from Code Owners" in branch protection,
+# this is what guarantees your personal sign-off on every change --
+# including PRs opened from forks by external contributors.
+#
+# Format: <path-pattern> <owner1> [<owner2> ...]
+# Last matching pattern wins.
+#
+# Update the owner below if your personal GitHub handle differs from the
+# repo owner. Add per-path overrides as the project grows, e.g.:
+#   terraform/  @430am @some-teammate
+#   docs/       @430am
+* @430am

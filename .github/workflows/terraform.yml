@@ -1,0 +1,47 @@
+name: terraform
+
+on:
+  pull_request:
+    paths:
+      - "terraform/**"
+      - ".github/workflows/terraform.yml"
+  push:
+    branches: [main]
+    paths:
+      - "terraform/**"
+      - ".github/workflows/terraform.yml"
+
+# Least-privilege default token. No Azure secrets are needed for these
+# checks (fmt / validate / test all run with mocked providers), which is
+# what makes it safe to let fork PRs trigger this workflow.
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    name: fmt / validate / test
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: terraform
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ~1.15
+          terraform_wrapper: false
+
+      - name: terraform fmt
+        run: terraform fmt -check -recursive
+
+      - name: terraform init (no backend)
+        run: terraform init -backend=false
+
+      - name: terraform validate
+        run: terraform validate -no-color
+
+      - name: terraform test
+        run: terraform test -no-color
