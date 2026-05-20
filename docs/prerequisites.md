@@ -47,8 +47,8 @@ export ARM_CLIENT_SECRET=<sp-secret>
 
 [terraform/environments/example.tfvars.hcl](../terraform/environments/example.tfvars.hcl) lists
 these `ARM_*` names as a copy-paste reference for the variables you need to
-export; the only value actually consumed from the tfvars file by the
-configuration is `current_ip_address`.
+export; no values are required from the tfvars file (the operator IP is
+auto-detected via ipify, and `allowed_ip_addresses` is optional).
 
 ## State
 

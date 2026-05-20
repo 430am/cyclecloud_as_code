@@ -15,36 +15,48 @@ resource "azurerm_subnet" "cyclecloud" {
   address_prefixes     = [each.value]
 }
 
-# Server-subnet NSG. Default deny-all-inbound from Internet (implicit). Allows
-# CycleCloud server reachability from inside the VNet (covers Bastion in
-# `bastion` mode), and -- in `public_ip` mode -- adds matching caller-IP
-# allow rules so the NIC NSG's Internet-facing rules aren't blackholed at
-# the subnet level (both NSGs are evaluated; either deny wins).
+# Server-subnet NSG. Default deny-all-inbound from Internet (implicit). Two
+# allow rules cover every scenario:
+#   1. VirtualNetwork -> VirtualNetwork on local.server_inbound_ports. Covers
+#      Bastion (bastion mode), future Slurm scheduler / cluster nodes, and
+#      private endpoints reaching back to the server.
+#   2. local.allowed_source_ips -> * on the same port set. Only meaningful in
+#      public_ip mode (the VM has no public IP otherwise), and only created
+#      when the list is non-empty.
 #
-# All rules are declared via a single `dynamic "security_rule"` block.
-# Mixing inline `security_rule` blocks with standalone
-# `azurerm_network_security_rule` resources targeting the same NSG is
-# unsupported by the azurerm provider: the inline set acts as the source of
-# truth and silently deletes any standalone rules on every reconciliation
-# (see https://registry.terraform.io/providers/hashicorp/azurerm/latest/docs/resources/network_security_rule).
+# The NIC-level NSG that used to live in cyclecloud.tf is gone -- the subnet
+# NSG enforces the same traffic for every NIC placed on the subnet (today the
+# CycleCloud server, tomorrow the Slurm scheduler / login nodes).
 resource "azurerm_network_security_group" "server" {
   location            = var.location
   name                = "${local.naming_token}-nsg-server"
   resource_group_name = azurerm_resource_group.testing.name
   tags                = local.common_tags
 
+  security_rule {
+    name                       = "allow-server-ports-from-vnet"
+    priority                   = 100
+    direction                  = "Inbound"
+    access                     = "Allow"
+    protocol                   = "Tcp"
+    source_port_range          = "*"
+    destination_port_ranges    = local.server_inbound_ports
+    source_address_prefix      = "VirtualNetwork"
+    destination_address_prefix = "VirtualNetwork"
+  }
+
   dynamic "security_rule" {
-    for_each = local.server_nsg_rules
+    for_each = length(local.allowed_source_ips) > 0 ? [1] : []
     content {
-      name                       = security_rule.value.name
-      priority                   = security_rule.value.priority
+      name                       = "allow-server-ports-from-allowed-ips"
+      priority                   = 200
       direction                  = "Inbound"
       access                     = "Allow"
       protocol                   = "Tcp"
       source_port_range          = "*"
-      destination_port_range     = security_rule.value.port
-      source_address_prefix      = security_rule.value.source
-      destination_address_prefix = security_rule.value.destination
+      destination_port_ranges    = local.server_inbound_ports
+      source_address_prefixes    = local.allowed_source_ips
+      destination_address_prefix = "*"
     }
   }
 }

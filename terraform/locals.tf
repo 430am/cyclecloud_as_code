@@ -1,19 +1,20 @@
 locals {
-  configured_current_ip_address = trimspace(var.current_ip_address)
-
-  # Live public IP of the machine running Terraform, used to keep the
-  # Key Vault firewall in sync with the operator's actual egress IP.
-  # Without this, `terraform destroy` fails with 403 ForbiddenByConnection
+  # Live public IP of the machine running Terraform (via ipify, see main.tf).
+  # Merged into var.allowed_ip_addresses so the Key Vault firewall and the
+  # server-subnet NSG always include the operator's current egress IP --
+  # without this, `terraform destroy` fails with 403 ForbiddenByConnection
   # when the data-plane refresh of azurerm_key_vault_secret runs from an
-  # IP that no longer matches var.current_ip_address.
-  detected_current_ip_address = trimspace(data.http.current_ip.response_body)
+  # IP that no longer matches a stale tfvars entry.
+  detected_ip = trimspace(data.http.current_ip.response_body)
 
-  # Union of the configured (var) IP and the live detected IP. Empty values
-  # are filtered so an unset var.current_ip_address doesn't produce an
-  # invalid empty CIDR in the firewall rules.
-  key_vault_allowed_ips = distinct([
-    for ip in [local.configured_current_ip_address, local.detected_current_ip_address] :
-    ip if length(ip) > 0
+  # Canonical caller allow-list used by both the KV firewall and the
+  # server-subnet NSG. Bare IPs are normalized to /32 so the same list is
+  # valid in NSG rules (which require CIDR notation in source_address_prefixes)
+  # and in network_acls.ip_rules.
+  allowed_source_ips = distinct([
+    for ip in concat(var.allowed_ip_addresses, [local.detected_ip]) :
+    strcontains(ip, "/") ? ip : "${ip}/32"
+    if length(trimspace(ip)) > 0
   ])
 
   use_bastion   = var.access_mode == "bastion"
@@ -64,23 +65,8 @@ locals {
     local.use_bastion ? { AzureBastionSubnet = local.bastion_subnet } : {}
   )
 
-  # Rule set for the `server` subnet NSG. Always includes the three
-  # intra-VNet allow rules; in public_ip mode also includes matching
-  # caller-IP allows so the NIC NSG's Internet-facing rules aren't
-  # blackholed at the subnet level. Consumed by the `dynamic` block on
-  # azurerm_network_security_group.server in network.tf -- see that
-  # resource for why the rules cannot live in standalone
-  # azurerm_network_security_rule resources.
-  server_nsg_rules = concat(
-    [
-      { name = "allow-vnet-inbound", priority = 100, port = "22", source = "VirtualNetwork", destination = "VirtualNetwork" },
-      { name = "allow-cyclecloud-https-from-vnet", priority = 110, port = "8443", source = "VirtualNetwork", destination = "VirtualNetwork" },
-      { name = "allow-8080-from-vnet", priority = 120, port = "8080", source = "VirtualNetwork", destination = "VirtualNetwork" },
-    ],
-    local.use_public_ip ? [
-      { name = "allow-ssh-from-caller", priority = 200, port = "22", source = local.configured_current_ip_address, destination = "*" },
-      { name = "allow-cyclecloud-https-from-caller", priority = 210, port = "8443", source = local.configured_current_ip_address, destination = "*" },
-      { name = "allow-8080-from-caller", priority = 220, port = "8080", source = local.configured_current_ip_address, destination = "*" },
-    ] : []
-  )
+  # Inbound TCP ports the server-subnet NSG must accept. Add Slurm
+  # scheduler ports (e.g. "6817", "6818") here in the future and both NSG
+  # rules in network.tf pick them up automatically.
+  server_inbound_ports = ["22", "8080", "8443"]
 }

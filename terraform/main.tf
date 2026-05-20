@@ -6,12 +6,12 @@ data "azurerm_client_config" "current" {}
 
 data "azurerm_subscription" "current" {}
 
-# Live public IP of the machine running Terraform. Used (alongside
-# var.current_ip_address) to populate the Key Vault firewall allow list,
-# so the data-plane Read/Write/Delete calls that the azurerm provider
-# makes for azurerm_key_vault_secret resources are never blocked by a
-# stale IP entry — in particular, `terraform destroy` would otherwise
-# fail with HTTP 403 ForbiddenByConnection.
+# Live public IP of the machine running Terraform. Merged into
+# local.allowed_source_ips so the Key Vault firewall and the server-subnet
+# NSG always include the operator's current egress IP -- without this, the
+# data-plane Read/Write/Delete calls the azurerm provider makes for
+# azurerm_key_vault_secret resources can fail with HTTP 403
+# ForbiddenByConnection (notably on `terraform destroy`).
 data "http" "current_ip" {
   url = "https://api.ipify.org"
 

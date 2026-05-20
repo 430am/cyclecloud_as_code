@@ -49,7 +49,7 @@ unconditionally.
 
 ```mermaid
 flowchart LR
-    operator(["Operator<br/>(current_ip_address)"])
+    operator(["Operator<br/>(allowed_ip_addresses<br/>+ auto-detected IP)"])
     internet{{Internet}}
 
     subgraph SUB["Azure Subscription"]
@@ -106,7 +106,6 @@ flowchart LR
                     nic --- vm
                     vm --- osDisk
                 end
-
                 subgraph SNPE["subnet: private_endpoint<br/>10.150.2.0/26"]
                     peKv["PE → Key Vault"]
                     peMonBlob["PE → monitoring blob"]
@@ -126,7 +125,6 @@ flowchart LR
             nat["NAT Gateway<br/>+ Public IP"]
             pipBas["Public IP (Bastion)"]
             pipVm["Public IP (VM NIC)"]
-            nsgNic["NIC NSG<br/>(caller IP only)"]
         end
     end
 
@@ -135,7 +133,7 @@ flowchart LR
     pipBas -.-> bastion
     bastion -. "SSH 22 /<br/>HTTPS tunnel" .-> vm
     operator == "SSH 22 / HTTP 8080<br/>(public_ip mode)" ==> pipVm
-    pipVm === nsgNic === nic
+    pipVm === nic
 
     %% Egress
     SNCluster -- egress --> nat
@@ -178,14 +176,14 @@ flowchart LR
     stFiles -. diag .-> la
 
     classDef cond stroke-dasharray: 4 3,stroke:#888;
-    class bastion,pipBas,SNBas,pipVm,nsgNic cond;
+    class bastion,pipBas,SNBas,pipVm cond;
 ```
 
 **How to read it**
 
 - **Solid double-arrow** = `public_ip` mode operator path (direct SSH / HTTPS
-  from `var.current_ip_address` to the VM NIC's public IP, gated by both the
-  NIC NSG and the matching `server` subnet NSG rules).
+  from `var.allowed_ip_addresses` (+ the auto-detected operator IP) to the
+  VM NIC's public IP, gated by the server-subnet NSG).
 - **Dashed lines through Bastion** = `bastion` mode operator path (browser →
   Bastion public IP → tunneled SSH/HTTPS to the VM's private IP; no public
   IP on the VM).
@@ -195,7 +193,7 @@ flowchart LR
   access_enabled = false`, so they're reachable **only** via their PEs.
   The Key Vault is **currently** configured with `network_acls.default_
   action = "Allow"` (see [docs/known-gaps.md](docs/known-gaps.md#key-vault-firewall)) — the
-  `key_vault_allowed_ips` list (configured + auto-detected operator IP) is
+  `allowed_source_ips` list (configured + auto-detected operator IP) is
   computed and assigned but not enforcing while default-Allow is in effect.
   Private DNS zones are VNet-linked so the storage / KV FQDNs resolve to
   the PE NICs from inside the VNet.
@@ -221,7 +219,7 @@ The five-line happy path. Each step links to the doc that explains it:
 #    -> docs/prerequisites.md
 git clone git@github.com:430am/cyclecloud_testing.git && cd cyclecloud_testing
 cd terraform
-cp environments/example.tfvars.hcl environments/local.tfvars.hcl    # edit current_ip_address
+cp environments/example.tfvars.hcl environments/local.tfvars.hcl    # optional: add allowed_ip_addresses
 export ARM_SUBSCRIPTION_ID=<your-sub-id> && az login
 terraform init && terraform apply -var-file=environments/local.tfvars.hcl
 ```

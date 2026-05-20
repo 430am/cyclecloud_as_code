@@ -30,62 +30,9 @@ resource "azurerm_public_ip" "cyclecloud" {
   tags                = local.common_tags
 }
 
-resource "azurerm_network_security_group" "cyclecloud" {
-  count               = local.use_public_ip ? 1 : 0
-  location            = var.location
-  name                = "${local.naming_token}-nsg-cc"
-  resource_group_name = azurerm_resource_group.testing.name
-  tags                = local.common_tags
-
-  security_rule {
-    name                       = "allow-ssh-from-caller"
-    priority                   = 100
-    direction                  = "Inbound"
-    access                     = "Allow"
-    protocol                   = "Tcp"
-    source_port_range          = "*"
-    destination_port_range     = "22"
-    source_address_prefix      = local.configured_current_ip_address
-    destination_address_prefix = "*"
-  }
-
-  security_rule {
-    name                       = "allow-cyclecloud-https-from-caller"
-    priority                   = 110
-    direction                  = "Inbound"
-    access                     = "Allow"
-    protocol                   = "Tcp"
-    source_port_range          = "*"
-    destination_port_range     = "8443"
-    source_address_prefix      = local.configured_current_ip_address
-    destination_address_prefix = "*"
-  }
-
-  security_rule {
-    name                       = "allow-8080-from-caller"
-    priority                   = 120
-    direction                  = "Inbound"
-    access                     = "Allow"
-    protocol                   = "Tcp"
-    source_port_range          = "*"
-    destination_port_range     = "8080"
-    source_address_prefix      = local.configured_current_ip_address
-    destination_address_prefix = "*"
-  }
-}
-
-resource "azurerm_network_interface_security_group_association" "cyclecloud" {
-  count                     = local.use_public_ip ? 1 : 0
-  network_interface_id      = azurerm_network_interface.cyclecloud.id
-  network_security_group_id = azurerm_network_security_group.cyclecloud[0].id
-}
-
-# Note: the matching subnet-level caller rules live inline on
-# azurerm_network_security_group.server (network.tf) via a `dynamic`
-# block keyed off local.use_public_ip. They cannot be declared as
-# standalone azurerm_network_security_rule resources here because the
-# azurerm provider does not support mixing the two on the same NSG --
-# the inline set would silently delete them on every reconciliation.
+# Inbound 22/8080/8443 from caller IPs is enforced by the server-subnet NSG
+# (azurerm_network_security_group.server in network.tf), which applies to
+# every NIC placed on the subnet. No NIC-level NSG is needed.
 
 resource "azurerm_network_interface" "cyclecloud" {
   location            = var.location

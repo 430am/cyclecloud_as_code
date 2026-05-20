@@ -20,9 +20,9 @@ workaround to keep `terraform destroy` and operator
 `az keyvault secret show` calls working regardless of egress IP.
 
 The enforcing path is fully wired:
-`default_action = "Deny"` + `ip_rules = local.key_vault_allowed_ips`,
-where the list is the union of `var.current_ip_address` and
-`data.http.current_ip` resolved at plan time
+`default_action = "Deny"` + `ip_rules = local.allowed_source_ips`,
+where the list is the union of `var.allowed_ip_addresses` and
+`data.http.current_ip` (normalized to `/32`) resolved at plan time
 (see [terraform/locals.tf](../terraform/locals.tf) and
 [terraform/keyvault.tf](../terraform/keyvault.tf)). Flipping the action
 back to `Deny` re-enables the IP allow-list.
@@ -51,7 +51,7 @@ ever lifts the floor.
 
 The `cyclecloud8` Debian package install on Ubuntu ships **without** a
 TLS keystore, so the CycleCloud web app only listens on **HTTP 8080**
-after `await_startup` returns. Port 8443 is open at the NSG level (NIC +
+after `await_startup` returns. Port 8443 is open at the NSG level (server
 subnet) but the cycle_server process never binds to it until you
 generate a keystore.
 
@@ -67,9 +67,9 @@ For operator-facing access this means:
   Browser-to-Bastion is HTTPS (Bastion's own cert); only the inside of
   the tunnel is plaintext.
 - **public_ip mode**: HTTP runs unencrypted over the Internet, scoped to
-  `var.current_ip_address` by NSG but still in cleartext. Acceptable
-  for a dev box; **do not** use this mode for anything sensitive without
-  enabling TLS first.
+  `var.allowed_ip_addresses` (+ auto-detected operator IP) by NSG but
+  still in cleartext. Acceptable for a dev box; **do not** use this mode
+  for anything sensitive without enabling TLS first.
 
 **Fix path** (untested in this repo): after `await_startup` succeeds,
 run something like

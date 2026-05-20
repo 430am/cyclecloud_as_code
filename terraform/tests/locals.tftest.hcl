@@ -66,8 +66,7 @@ mock_provider "http" {
 # Shared input baseline used by every run block; individual runs override
 # only the variables relevant to what they're asserting.
 variables {
-  application_name   = "cctest"
-  current_ip_address = "203.0.113.10"
+  application_name = "cctest"
 }
 
 # ---------------------------------------------------------------------------

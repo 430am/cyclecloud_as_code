@@ -8,8 +8,8 @@ ARM_CLIENT_ID       = "00000000-0000-0000-0000-000000000000"
 ARM_CLIENT_SECRET   = "replace-with-client-secret"
 ARM_TENANT_ID       = "00000000-0000-0000-0000-000000000000"
 
-# Local IP address to be used in the local_ip_address_prefixes variable
-# for Terraform configuration. This should be the public IP address of 
-# the user running Terraform, or a CIDR block that includes it, to 
-# allow dataplane access to resources placed behind a private endpoint.
-current_ip_address = "0.0.0.0"
+# Additional caller IPs / CIDRs to allow on the Key Vault firewall and the
+# server-subnet NSG (when access_mode = "public_ip"). The operator's live
+# public IP is auto-detected via ipify and merged in automatically, so this
+# only needs entries for teammates, CI runners, jump hosts, etc.
+# allowed_ip_addresses = ["203.0.113.10", "198.51.100.0/24"]

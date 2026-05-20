@@ -11,11 +11,12 @@ resource "azurerm_key_vault" "cyclecloud" {
   network_acls {
     default_action = "Allow"
     bypass         = "AzureServices"
-    # Always allow the operator's live public IP in addition to the
-    # configured value, so `terraform plan`/`apply`/`destroy` can reach the
-    # data plane even if the caller's egress IP has changed since the last
-    # apply (the secret resources do a data-plane Read on every refresh).
-    ip_rules = local.key_vault_allowed_ips
+    # Always allow the operator's live public IP in addition to any configured
+    # entries, so `terraform plan`/`apply`/`destroy` can reach the data plane
+    # even if the caller's egress IP has changed since the last apply (the
+    # secret resources do a data-plane Read on every refresh). KV ip_rules
+    # accepts both bare IPs and CIDRs; allowed_source_ips normalizes to /32.
+    ip_rules = local.allowed_source_ips
   }
 }
 
