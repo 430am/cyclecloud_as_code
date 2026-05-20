@@ -1,3 +1,16 @@
+# The bootstrap script is rendered separately so the resulting bash file can
+# use ${var}-style references freely without colliding with Terraform's own
+# template syntax. The rendered content is then embedded into cloud-config via
+# write_files.
+locals {
+  cc_bootstrap_script = templatefile("${path.module}/../scripts/cc-bootstrap.sh.tftpl", {
+    admin_user         = var.vm_admin_username
+    key_vault_name     = azurerm_key_vault.cyclecloud.name
+    pwd_secret_name    = azurerm_key_vault_secret.cyclecloud_admin_password.name
+    pubkey_secret_name = azurerm_key_vault_secret.public_key.name
+  })
+}
+
 data "cloudinit_config" "cyclecloud" {
   gzip          = true
   base64_encode = true
@@ -7,15 +20,13 @@ data "cloudinit_config" "cyclecloud" {
     filename     = "cloud-config.yaml"
     content = templatefile("${path.module}/../scripts/cloud-config.yaml.tftpl", {
       admin_user             = var.vm_admin_username
-      key_vault_name         = azurerm_key_vault.cyclecloud.name
-      pwd_secret_name        = azurerm_key_vault_secret.cyclecloud_admin_password.name
-      pubkey_secret_name     = azurerm_key_vault_secret.public_key.name
       resource_group_name    = azurerm_resource_group.testing.name
       subscription_id        = data.azurerm_subscription.current.subscription_id
       tenant_id              = data.azurerm_client_config.current.tenant_id
       location               = var.location
       storage_account_name   = azurerm_storage_account.locker.name
       storage_container_name = azurerm_storage_container.cyclecloud_locker.name
+      bootstrap_script       = local.cc_bootstrap_script
     })
   }
 }
@@ -99,4 +110,52 @@ resource "azurerm_virtual_machine_extension" "ama" {
   virtual_machine_id         = azurerm_linux_virtual_machine.cyclecloud.id
   auto_upgrade_minor_version = true
   automatic_upgrade_enabled  = true
+}
+
+# Block `terraform apply` until the in-VM bootstrap script declares success
+# (touches /var/lib/cc-bootstrap.done) or failure (/var/lib/cc-bootstrap.failed).
+# Uses `az vm run-command invoke`, which goes via the Azure control plane and
+# therefore works in bastion-only deployments with no SSH path from the
+# operator workstation.
+#
+# Operator must already have `az login` context (the same context Terraform
+# uses to authenticate). Polls every 20s for up to ~30 minutes.
+resource "null_resource" "cyclecloud_ready" {
+  triggers = {
+    vm_id            = azurerm_linux_virtual_machine.cyclecloud.id
+    bootstrap_sha256 = sha256(local.cc_bootstrap_script)
+  }
+
+  provisioner "local-exec" {
+    interpreter = ["/bin/bash", "-c"]
+    command     = <<-EOT
+      set -euo pipefail
+      RG="${azurerm_resource_group.testing.name}"
+      VM="${azurerm_linux_virtual_machine.cyclecloud.name}"
+      echo "[cyclecloud_ready] polling $VM for /var/lib/cc-bootstrap.done ..."
+      for i in $(seq 1 90); do
+        out=$(az vm run-command invoke -g "$RG" -n "$VM" \
+                --command-id RunShellScript \
+                --scripts "if [ -f /var/lib/cc-bootstrap.failed ]; then echo FAILED; tail -n 40 /var/log/cc-bootstrap.log 2>/dev/null || true; elif [ -f /var/lib/cc-bootstrap.done ]; then echo READY; else echo PENDING; fi" \
+                --query 'value[0].message' -o tsv 2>/dev/null || echo PENDING)
+        if echo "$out" | grep -q READY; then
+          echo "[cyclecloud_ready] CycleCloud bootstrap complete after $((i * 20))s."
+          exit 0
+        fi
+        if echo "$out" | grep -q FAILED; then
+          echo "[cyclecloud_ready] CycleCloud bootstrap FAILED. Last log lines:" >&2
+          echo "$out" >&2
+          exit 1
+        fi
+        echo "[cyclecloud_ready] still pending ($i/90); sleeping 20s ..."
+        sleep 20
+      done
+      echo "[cyclecloud_ready] timeout: sentinel not found after 30 minutes." >&2
+      exit 1
+    EOT
+  }
+
+  depends_on = [
+    azurerm_virtual_machine_extension.ama,
+  ]
 }

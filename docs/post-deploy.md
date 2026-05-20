@@ -8,40 +8,58 @@ The cloud-init bootstrap in
 the full CycleCloud install end-to-end — there is **no web wizard to click
 through**. This is **Phase 1** of the project (see
 [known-gaps.md](known-gaps.md#no-automation-of-cluster-creation-phase-2)
-for Phase 2 — cluster automation). After `terraform apply` completes, the
-VM still needs ~5–10 minutes to finish:
+for Phase 2 — cluster automation).
 
-1. `cyclecloud8` package install
+`terraform apply` does **not** return until the bootstrap is fully
+complete. The `null_resource.cyclecloud_ready` in
+[terraform/cyclecloud.tf](../terraform/cyclecloud.tf) polls the VM every
+20 s via `az vm run-command invoke` and only succeeds once the in-VM
+sentinel `/var/lib/cc-bootstrap.done` appears (or fails fast if
+`/var/lib/cc-bootstrap.failed` shows up). Plan on roughly 10–15 minutes
+from `apply` starting to it returning.
+
+The bootstrap stages (in [scripts/cc-bootstrap.sh.tftpl](../scripts/cc-bootstrap.sh.tftpl)):
+
+1. `cyclecloud8` package install (cloud-config `runcmd`)
 2. `await_startup` (CycleCloud web app comes online)
 3. CycleCloud CLI install from `/opt/cycle_server/tools/cyclecloud-cli.zip`
-4. Managed-identity login + Key Vault secret fetch (in the single
-   secret-dependent `runcmd` shell block — see the note in
-   [scripts/cloud-config.yaml.tftpl](../scripts/cloud-config.yaml.tftpl)
-   about why everything that needs `CCPASSWORD` / `CCPUBKEY` has to share
-   one shell, and why `set -o pipefail` is **not** used there — cloud-init
-   runs runcmd under `/bin/sh` (dash), not bash)
+4. **`cc-bootstrap.sh` starts here** — managed-identity login + Key Vault
+   fetch of admin password and SSH public key
 5. Drop `account_data.json` into `/opt/cycle_server/config/data/` (skips the
-   site name / EULA / admin-account wizard; CycleCloud renames it to
+   site name / EULA / admin-account wizard; CycleCloud renames the file to
    `*.imported` once processed)
-6. `cyclecloud initialize --batch --url=http://localhost:8080/ ...`
+6. Poll `/ui/metadata` for HTTP 200 — `await_startup` returns before the
+   REST layer is ready
+7. `cyclecloud initialize --batch --url=http://localhost:8080/ ...`
    (HTTP loopback — CC8's package install doesn't open 8443 until a TLS
    keystore is configured; see
    [known-gaps.md](known-gaps.md#https-on-8443-is-not-configured-out-of-the-box))
-7. `cyclecloud account create -f azure_data.json` (registers the
+8. `cyclecloud account create -f azure_data.json` (registers the
    subscription using `AzureRMUseManagedIdentity: true`, with the locker
    storage account and `cyclecloud` container already provisioned by
    Terraform)
+9. Sentinel `/var/lib/cc-bootstrap.done` is written; on-disk secrets are
+   shredded
 
 ## Verifying the bootstrap finished
 
-SSH into the VM (see [ssh-key.md](ssh-key.md)) and watch cloud-init
-complete:
+In most cases the `terraform apply` exit code is all you need. If you want
+to inspect the VM directly, SSH in (see [ssh-key.md](ssh-key.md)) and:
 
 ```bash
-sudo cloud-init status --wait                                 # blocks until done
-sudo grep -E 'CycleCloud|cyclecloud' /var/log/cloud-init-output.log | tail -40
+ls /var/lib/cc-bootstrap.done                                 # sentinel exists on success
+sudo tail -n 80 /var/log/cc-bootstrap.log                     # timestamped per-stage log
+sudo cloud-init status --wait                                 # blocks until cloud-init is done
 ls /opt/cycle_server/config/data/account_data.json.imported   # should exist
 sudo -u cyclecloudadmin /usr/local/bin/cyclecloud locker list # should list the configured account
+```
+
+If the bootstrap failed and you want to re-run it after fixing the cause,
+the script is idempotent — delete the sentinel and re-invoke:
+
+```bash
+sudo rm -f /var/lib/cc-bootstrap.done /var/lib/cc-bootstrap.failed
+sudo /usr/local/sbin/cc-bootstrap.sh
 ```
 
 Boot diagnostics are also enabled on the VM (Azure-managed storage); the
@@ -69,9 +87,8 @@ you can go straight to creating a cluster.
 
 > If `Settings → Subscriptions` is empty, the `cyclecloud account create`
 > step failed (usually a transient RBAC propagation race). Inspect
-> `/var/log/cloud-init-output.log` on the VM, then re-run the command by
-> hand:
-> `runuser -l cyclecloudadmin -c "cyclecloud account create -f ~/azure_data.json"`.
+> `/var/log/cc-bootstrap.log` on the VM, then re-run the whole bootstrap:
+> `sudo rm -f /var/lib/cc-bootstrap.{done,failed} && sudo /usr/local/sbin/cc-bootstrap.sh`.
 
 ## Mounting the NFS shares (sched + shared)
 

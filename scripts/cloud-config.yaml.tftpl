@@ -15,7 +15,7 @@ packages:
 
 # Render Terraform-driven config files onto the VM before runcmd executes.
 # Secrets are NOT inlined here -- they are pulled from Key Vault at runtime
-# by the managed identity, then sed-substituted into account_data.json.
+# by the managed identity (see /usr/local/sbin/cc-bootstrap.sh).
 write_files:
   - path: /tmp/cyclecloud/account_data.json
     permissions: "0600"
@@ -68,6 +68,15 @@ write_files:
         "AcceptMarketplaceTerms": true
       }
 
+  # The bootstrap script that runs after CycleCloud is installed. Rendered by
+  # Terraform from scripts/cc-bootstrap.sh.tftpl so we get real bash, real
+  # logging, and a clean re-runnable file on the VM for debugging.
+  - path: /usr/local/sbin/cc-bootstrap.sh
+    permissions: "0750"
+    owner: root:root
+    content: |
+      ${indent(6, bootstrap_script)}
+
 runcmd:
   # ----- Base install: Java 8 + Azure CLI + CycleCloud -----------------------
   - update-alternatives --set java /usr/lib/jvm/java-8-openjdk-amd64/jre/bin/java
@@ -92,111 +101,16 @@ runcmd:
   - apt-get -qq update
   - DEBIAN_FRONTEND=noninteractive apt-get -y install azure-cli cyclecloud8
 
-  # ----- Phase 1: skip the web wizard, register the subscription -------------
-  # Wait until the CycleCloud web app responds (cyclecloud8 starts the service
-  # automatically, but it needs ~30-120s to become ready).
+  # ----- Wait for the cycle_server service to be live ------------------------
   - /opt/cycle_server/cycle_server await_startup
 
-  # ----- Install the CycleCloud CLI (bundled with the server) ----------------
+  # ----- Install the bundled CycleCloud CLI ----------------------------------
   - unzip -o /opt/cycle_server/tools/cyclecloud-cli.zip -d /tmp/cyclecloud
   - python3 /tmp/cyclecloud/cyclecloud-cli-installer/install.py -y --system --installdir /opt/cycle_server/.cycle
 
-  # ===========================================================================
-  # FUTURE WORK -- everything below is intentionally commented out so we can
-  # verify the base install (packages + cyclecloud8 service + CLI) succeeds
-  # before re-enabling the account/subscription bootstrap. To re-enable,
-  # uncomment the `- |` block below in its entirety.
-  # ===========================================================================
-  #
-  # # ----- Phase 1 (continued): fetch secrets and finish bootstrap ------------
-  # # IMPORTANT: cloud-init runs each `runcmd` item in its own shell, so shell
-  # # variables (e.g. CCPASSWORD assigned via $(az keyvault secret show ...))
-  # # do not persist between items.
-  # #
-  # # Also: cloud-init concatenates all runcmd items into a single script that
-  # # is executed by /bin/sh (dash on Ubuntu), not bash. Bash-only options
-  # # like `set -o pipefail` would error out with `Illegal option -o pipefail`,
-  # # so stick to POSIX-portable shell here. There are no pipelines in this
-  # # block today, so `set -eu` is sufficient.
-  # - |
-  #   set -eu
-  #
-  #   # Authenticate the VM's managed identity to ARM, then pull the admin
-  #   # password + SSH public key from Key Vault. The KV firewall denies public
-  #   # traffic; the VM reaches KV via the private endpoint in
-  #   # private_endpoints.tf.
-  #   az login --identity --allow-no-subscriptions
-  #   CCPASSWORD=$(az keyvault secret show --vault-name "${key_vault_name}" --name "${pwd_secret_name}"    --query value -o tsv)
-  #   CCPUBKEY=$(az keyvault secret show   --vault-name "${key_vault_name}" --name "${pubkey_secret_name}" --query value -o tsv)
-  #   export CCPASSWORD CCPUBKEY
-  #
-  #   # Substitute placeholders into account_data.json using python so the
-  #   # values are inserted literally (no shell / sed escaping concerns for
-  #   # special characters in the generated password).
-  #   python3 - <<'PY'
-  #   import json, os
-  #   with open('/tmp/cyclecloud/account_data.json') as f:
-  #       text = f.read()
-  #   text = text.replace('__CCPASSWORD__', os.environ['CCPASSWORD'])
-  #   text = text.replace('__CCPUBKEY__',   os.environ['CCPUBKEY'])
-  #   # Validate JSON before writing
-  #   json.loads(text)
-  #   with open('/tmp/cyclecloud/account_data.json', 'w') as f:
-  #       f.write(text)
-  #   PY
-  #
-  #   # Hand the file to CycleCloud's import loop. The file is renamed to
-  #   # .imported once processed (typically within a few seconds). Fail hard
-  #   # if the rename never happens -- otherwise `cyclecloud initialize` will
-  #   # run before the admin user exists and produce a confusing 401/404.
-  #   install -m 0640 -o cycle_server -g cycle_server /tmp/cyclecloud/account_data.json /opt/cycle_server/config/data/account_data.json
-  #   imported=0
-  #   for i in $(seq 1 60); do
-  #     if [ -f /opt/cycle_server/config/data/account_data.json.imported ]; then
-  #       imported=1
-  #       break
-  #     fi
-  #     sleep 2
-  #   done
-  #   if [ "$imported" -ne 1 ]; then
-  #     echo "ERROR: account_data.json was not imported by cycle_server within 120s" >&2
-  #     ls -la /opt/cycle_server/config/data/ >&2 || true
-  #     exit 1
-  #   fi
-  #
-  #   # `await_startup` returns once the JVM/web container is listening, but
-  #   # the application layer (REST endpoints under /ui, account import) needs
-  #   # more time to come online -- if we hit it too early `cyclecloud
-  #   # initialize` errors with `Failed to get metadata endpoint
-  #   # http://localhost:8080/ui/metadata, status code 404`. Poll until the
-  #   # metadata endpoint returns 200 before continuing.
-  #   metadata_ready=0
-  #   for i in $(seq 1 90); do
-  #     code=$(curl -s -o /dev/null -w "%%{http_code}" http://localhost:8080/ui/metadata || echo "000")
-  #     if [ "$code" = "200" ]; then
-  #       metadata_ready=1
-  #       break
-  #     fi
-  #     sleep 2
-  #   done
-  #   if [ "$metadata_ready" -ne 1 ]; then
-  #     echo "ERROR: /ui/metadata not ready after 180s (last HTTP code=$code)" >&2
-  #     exit 1
-  #   fi
-  #
-  #   # Initialize the CLI for the admin user, then register the subscription.
-  #   # CycleCloud 8 listens on HTTP **8080** by default. Port 8443 (HTTPS) is
-  #   # NOT open until a TLS keystore is configured (see docs/known-gaps.md --
-  #   # the Ubuntu package install ships without a self-signed cert, unlike the
-  #   # Marketplace image). Bootstrapping over the loopback HTTP port avoids
-  #   # the chicken-and-egg TLS problem; the traffic never leaves the VM.
-  #   runuser -l ${admin_user} -c "/usr/local/bin/cyclecloud initialize --batch \
-  #       --url=http://localhost:8080/ \
-  #       --username='${admin_user}' --password='$CCPASSWORD'"
-  #   install -m 0644 -o ${admin_user} -g ${admin_user} /tmp/cyclecloud/azure_data.json /home/${admin_user}/azure_data.json
-  #   runuser -l ${admin_user} -c "/usr/local/bin/cyclecloud account create -f /home/${admin_user}/azure_data.json"
-  #
-  #   # Scrub the secrets we materialized on disk. `unset` only affects this
-  #   # shell, but that's the only shell they ever lived in.
-  #   shred -u /tmp/cyclecloud/account_data.json /home/${admin_user}/azure_data.json || true
-  #   unset CCPASSWORD CCPUBKEY
+  # ----- Bootstrap: admin user, CLI init, subscription registration ----------
+  # The script is idempotent and writes /var/lib/cc-bootstrap.{done,failed}
+  # plus a full transcript at /var/log/cc-bootstrap.log. The Terraform
+  # null_resource `cyclecloud_ready` polls for the sentinel before declaring
+  # the apply complete.
+  - /usr/local/sbin/cc-bootstrap.sh
