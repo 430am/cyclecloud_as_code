@@ -22,10 +22,10 @@ data "cloudinit_config" "cyclecloud" {
       admin_user             = var.vm_admin_username
       resource_group_name    = azurerm_resource_group.testing.name
       subscription_id        = data.azurerm_subscription.current.subscription_id
-      tenant_id              = data.azurerm_client_config.current.tenant_id
       location               = var.location
       storage_account_name   = azurerm_storage_account.locker.name
       storage_container_name = azurerm_storage_container.cyclecloud_locker.name
+      locker_identity_id     = azurerm_user_assigned_identity.cyclecloud.id
       bootstrap_script       = local.cc_bootstrap_script
     })
   }

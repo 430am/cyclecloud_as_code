@@ -54,10 +54,10 @@ write_files:
         "Environment": "public",
         "AzureRMUseManagedIdentity": true,
         "AzureResourceGroup": "${resource_group_name}",
-        "AzureRMApplicationId": " ",
-        "AzureRMApplicationSecret": " ",
+        "AzureRMApplicationId": null,
+        "AzureRMApplicationSecret": null,
         "AzureRMSubscriptionId": "${subscription_id}",
-        "AzureRMTenantId": "${tenant_id}",
+        "AzureRMTenantId": null,
         "DefaultAccount": true,
         "Location": "${location}",
         "Name": "azure",
@@ -65,6 +65,8 @@ write_files:
         "ProviderId": "${subscription_id}",
         "RMStorageAccount": "${storage_account_name}",
         "RMStorageContainer": "${storage_container_name}",
+        "LockerAuthMode": "ManagedIdentity",
+        "LockerIdentity": "${locker_identity_id}",
         "AcceptMarketplaceTerms": true
       }
 
