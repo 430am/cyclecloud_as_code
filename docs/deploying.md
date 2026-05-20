@@ -174,4 +174,6 @@ time.
 - Choose how you'll reach the VM: [access-modes.md](access-modes.md).
 - Pull the SSH key out of Key Vault: [ssh-key.md](ssh-key.md).
 - Watch the cloud-init bootstrap finish and log into the web UI:
-  [post-deploy.md](post-deploy.md).
+  [post-deploy.md](post-deploy.md). (`terraform apply` already blocks until
+  the in-VM bootstrap completes; this step is now mostly for inspecting the
+  log on the VM if you want to.)

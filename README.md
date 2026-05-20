@@ -27,7 +27,8 @@ for CycleCloud to manage compute resources in the same subscription.
 | [terraform/roles.tf](terraform/roles.tf) | Custom **CycleCloud Orchestrator Role `<naming_token>`** assigned at subscription scope to **both** the VM's system-assigned identity and the user-assigned identity (`azurerm_user_assigned_identity.cyclecloud`, attached to the VM and reserved for cluster-node use). Key Vault Administrator for caller, Key Vault Secrets User + Storage Blob Data Contributor (scoped to the dedicated locker SA) for the VM identity, Storage Blob + Table Data Contributor for the LA workspace identity on the monitoring SA |
 | [terraform/locals.tf](terraform/locals.tf) | Subnet CIDR math via `cidrsubnet`, tag merging, DNS zone catalogs, `naming_token` / `naming_token_compact` (drive every resource name) |
 | [terraform/outputs.tf](terraform/outputs.tf) | Resource group, VM name/IP, Bastion name, Key Vault URI, etc. |
-| [scripts/cloud-config.yaml.tftpl](scripts/cloud-config.yaml.tftpl) | cloud-init template: installs OpenJDK 8, Azure CLI, and `cyclecloud8`, then runs the Phase 1 bootstrap — fetches the admin password + public key from Key Vault via managed identity, drops `account_data.json` into `/opt/cycle_server/config/data/` to bypass the web wizard, installs the CycleCloud CLI, runs `cyclecloud initialize` + `cyclecloud account create` to register the subscription with MSI auth. All secret-dependent steps live in a single `runcmd` shell block so the `CCPASSWORD` / `CCPUBKEY` shell vars stay in scope (cloud-init runs each list item in a fresh shell) |
+| [scripts/cloud-config.yaml.tftpl](scripts/cloud-config.yaml.tftpl) | cloud-init template: installs OpenJDK 8, Azure CLI, and `cyclecloud8`, then writes and invokes the Phase 1 bootstrap script |
+| [scripts/cc-bootstrap.sh.tftpl](scripts/cc-bootstrap.sh.tftpl) | bash bootstrap rendered onto the VM as `/usr/local/sbin/cc-bootstrap.sh` — fetches the admin password + public key from Key Vault via managed identity, drops `account_data.json` into `/opt/cycle_server/config/data/` to bypass the web wizard, runs `cyclecloud initialize` + `cyclecloud account create` to register the subscription with MSI auth, and writes `/var/lib/cc-bootstrap.done` on success |
 
 ### Subnet layout
 
@@ -224,8 +225,9 @@ export ARM_SUBSCRIPTION_ID=<your-sub-id> && az login
 terraform init && terraform apply -var-file=environments/local.tfvars.hcl
 ```
 
-Then wait ~5–10 min for the cloud-init bootstrap to finish on the VM and
-log into the web UI — see [docs/post-deploy.md](docs/post-deploy.md).
+`terraform apply` blocks until the in-VM bootstrap finishes (10–15 min on
+first boot), then log into the web UI — see
+[docs/post-deploy.md](docs/post-deploy.md).
 
 ## Docs
 

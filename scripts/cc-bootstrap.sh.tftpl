@@ -1,0 +1,153 @@
+#!/usr/bin/env bash
+# =============================================================================
+# CycleCloud server bootstrap
+# =============================================================================
+# Runs once on first boot (invoked from cloud-config.yaml.tftpl `runcmd`).
+# Idempotent: if /var/lib/cc-bootstrap.done exists this script exits 0.
+#
+# Stages:
+#   1. Pull admin password + SSH public key from Key Vault via managed identity.
+#   2. Substitute them into /tmp/cyclecloud/account_data.json.
+#   3. Install the account record into /opt/cycle_server/config/data/ and wait
+#      for cycle_server to import it (rename to *.imported).
+#   4. Poll /ui/metadata until the REST layer is ready.
+#   5. `cyclecloud initialize` for the admin user.
+#   6. `cyclecloud account create` to register the Azure subscription + locker.
+#   7. Scrub on-disk secrets, drop the sentinel, log success.
+#
+# All output is tee'd to /var/log/cc-bootstrap.log so failures can be diagnosed
+# via `az vm run-command` or by SSH'ing in.
+# =============================================================================
+
+set -euo pipefail
+
+readonly LOG_FILE=/var/log/cc-bootstrap.log
+readonly DONE_FILE=/var/lib/cc-bootstrap.done
+readonly FAIL_FILE=/var/lib/cc-bootstrap.failed
+readonly ACCOUNT_SRC=/tmp/cyclecloud/account_data.json
+readonly ACCOUNT_DST=/opt/cycle_server/config/data/account_data.json
+readonly AZURE_SRC=/tmp/cyclecloud/azure_data.json
+readonly AZURE_DST=/home/${admin_user}/azure_data.json
+
+# Templated by Terraform (terraform/cyclecloud.tf -> data.cloudinit_config).
+readonly ADMIN_USER='${admin_user}'
+readonly KV_NAME='${key_vault_name}'
+readonly PWD_SECRET='${pwd_secret_name}'
+readonly PUBKEY_SECRET='${pubkey_secret_name}'
+
+# Mirror everything to the log file from this point on.
+mkdir -p "$(dirname "$LOG_FILE")"
+exec > >(tee -a "$LOG_FILE") 2>&1
+
+log() { echo "[$(date -Is)] $*"; }
+
+on_error() {
+  local rc=$?
+  log "FATAL: cc-bootstrap failed with exit code $rc"
+  touch "$FAIL_FILE"
+  exit "$rc"
+}
+trap on_error ERR
+
+# -------- Idempotency guard --------------------------------------------------
+if [[ -f "$DONE_FILE" ]]; then
+  log "cc-bootstrap already complete ($DONE_FILE present); exiting."
+  exit 0
+fi
+
+log "starting cc-bootstrap (admin_user=$ADMIN_USER, kv=$KV_NAME)"
+
+# -------- Stage 1: pull secrets from Key Vault -------------------------------
+log "stage 1: az login --identity + Key Vault fetch"
+az login --identity --allow-no-subscriptions >/dev/null
+
+CCPASSWORD=$(az keyvault secret show --vault-name "$KV_NAME" \
+  --name "$PWD_SECRET" --query value -o tsv)
+CCPUBKEY=$(az keyvault secret show --vault-name "$KV_NAME" \
+  --name "$PUBKEY_SECRET" --query value -o tsv)
+export CCPASSWORD CCPUBKEY
+
+# -------- Stage 2: substitute placeholders in account_data.json --------------
+log "stage 2: rendering account_data.json"
+python3 - <<'PY'
+import json, os
+with open('/tmp/cyclecloud/account_data.json') as f:
+    text = f.read()
+text = text.replace('__CCPASSWORD__', os.environ['CCPASSWORD'])
+text = text.replace('__CCPUBKEY__',   os.environ['CCPUBKEY'])
+json.loads(text)  # validate
+with open('/tmp/cyclecloud/account_data.json', 'w') as f:
+    f.write(text)
+PY
+
+# -------- Stage 3: install + wait for import ---------------------------------
+log "stage 3: installing account_data.json for cycle_server to import"
+install -m 0640 -o cycle_server -g cycle_server "$ACCOUNT_SRC" "$ACCOUNT_DST"
+
+imported=0
+for i in $(seq 1 60); do
+  if [[ -f "$${ACCOUNT_DST}.imported" ]]; then
+    imported=1
+    log "  account_data.json imported after $((i * 2))s"
+    break
+  fi
+  sleep 2
+done
+if [[ "$imported" -ne 1 ]]; then
+  log "ERROR: account_data.json was not imported within 120s"
+  ls -la "$(dirname "$ACCOUNT_DST")" >&2 || true
+  exit 1
+fi
+
+# -------- Stage 4: wait for REST layer ---------------------------------------
+# `await_startup` returns when the JVM is listening, but /ui/metadata isn't
+# ready for another 30-60s. Polling avoids a confusing 404 from `cyclecloud
+# initialize`.
+log "stage 4: waiting for /ui/metadata to return 200"
+metadata_ready=0
+last_code="000"
+for i in $(seq 1 90); do
+  last_code=$(curl -s -o /dev/null -w "%%{http_code}" \
+    http://localhost:8080/ui/metadata || echo "000")
+  if [[ "$last_code" == "200" ]]; then
+    metadata_ready=1
+    log "  /ui/metadata ready after $((i * 2))s"
+    break
+  fi
+  sleep 2
+done
+if [[ "$metadata_ready" -ne 1 ]]; then
+  log "ERROR: /ui/metadata not ready after 180s (last HTTP code=$last_code)"
+  exit 1
+fi
+
+# -------- Stage 5: initialize the CLI for the admin user ---------------------
+# CycleCloud 8 on Ubuntu (cyclecloud8 apt package) listens on HTTP 8080 only;
+# port 8443 (HTTPS) requires a TLS keystore that ships only with the
+# Marketplace image. Bootstrapping over loopback HTTP keeps traffic on the VM.
+#
+# NOTE: no trailing slash on --url. The CLI appends paths like /ui/metadata
+# directly, so a trailing slash yields http://host:8080//ui/metadata -> 404.
+log "stage 5: cyclecloud initialize"
+runuser -l "$ADMIN_USER" -c "/usr/local/bin/cyclecloud initialize --batch \
+    --url=http://localhost:8080 \
+    --username='$ADMIN_USER' --password='$CCPASSWORD'"
+
+# -------- Stage 6: register the Azure subscription as the default account ----
+log "stage 6: cyclecloud account create"
+install -m 0644 -o "$ADMIN_USER" -g "$ADMIN_USER" "$AZURE_SRC" "$AZURE_DST"
+runuser -l "$ADMIN_USER" -c "/usr/local/bin/cyclecloud account create -f $AZURE_DST"
+
+# Sanity check: locker should now be registered.
+log "stage 6: verifying locker registration"
+runuser -l "$ADMIN_USER" -c "/usr/local/bin/cyclecloud locker list" || \
+  log "  WARNING: locker list returned non-zero (continuing)"
+
+# -------- Stage 7: scrub secrets, drop sentinel ------------------------------
+log "stage 7: scrubbing on-disk secrets"
+shred -u "$ACCOUNT_SRC" "$AZURE_DST" 2>/dev/null || true
+unset CCPASSWORD CCPUBKEY
+
+mkdir -p "$(dirname "$DONE_FILE")"
+touch "$DONE_FILE"
+log "cc-bootstrap complete"
