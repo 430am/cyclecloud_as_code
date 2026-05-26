@@ -1,0 +1,27 @@
+{
+  "env_name": "spoke-example",
+  "application_name": "ccspoke",
+  "location": "southcentralus",
+  "vm_admin_username": "cyclecloudadmin",
+  "vnet_address_space": ["10.150.0.0/16"],
+  "deployment_mode": "spoke",
+  "access_mode": "private_ip",
+  "hub": {
+    "subscription_id": "00000000-0000-0000-0000-000000000000",
+    "virtual_network": {
+      "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-hub/providers/Microsoft.Network/virtualNetworks/vnet-hub",
+      "allow_forwarded_traffic": true,
+      "use_remote_gateways": false,
+      "create_reverse_peering": true
+    },
+    "monitoring": {
+      "log_analytics_workspace_id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-hub/providers/Microsoft.OperationalInsights/workspaces/law-hub"
+    }
+  },
+  "tags": {
+    "managed_by": "terraform",
+    "project": "cyclecloud testing",
+    "workload": "Azure CycleCloud",
+    "topology": "spoke"
+  }
+}

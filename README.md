@@ -244,6 +244,23 @@ terraform init && terraform apply -var-file=environments/local.tfvars.hcl
 first boot), then log into the web UI — see
 [docs/post-deploy.md](docs/post-deploy.md).
 
+### Guided alternative
+
+If you'd rather be walked through every variable (including the spoke /
+private_ip choices), use the Python wrapper. It uses your active Azure
+CLI session for auth, writes a tfvars file to `terraform/environments/`,
+then runs `terraform init` + `terraform plan`:
+
+```bash
+az login  # ensure 'az account show' points at the right subscription
+python3 scripts/pre-build/deploy.py
+# ... or non-interactively from an answers file:
+python3 scripts/pre-build/deploy.py \
+  --answers scripts/pre-build/answers.example.json --non-interactive
+```
+
+Stdlib-only, no extra Python deps. See `python3 scripts/pre-build/deploy.py --help`.
+
 ## Docs
 
 In-depth operator documentation lives in [docs/](docs/README.md):
