@@ -46,7 +46,10 @@ resource "azurerm_network_security_group" "server" {
   }
 
   dynamic "security_rule" {
-    for_each = length(local.allowed_source_ips) > 0 ? [1] : []
+    # Only meaningful in public_ip mode -- the VM has no public IP otherwise.
+    # In bastion / private_ip mode the VirtualNetwork->VirtualNetwork rule
+    # above covers all legitimate sources.
+    for_each = local.use_public_ip && length(local.allowed_source_ips) > 0 ? [1] : []
     content {
       name                       = "allow-server-ports-from-allowed-ips"
       priority                   = 200

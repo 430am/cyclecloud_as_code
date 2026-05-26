@@ -32,3 +32,19 @@ resource "azurerm_resource_group" "testing" {
   location = var.location
 }
 
+# Cross-variable invariants Terraform can't express in a single variable's
+# `validation` block.
+check "spoke_requires_hub" {
+  assert {
+    condition     = !local.is_spoke || var.hub != null
+    error_message = "deployment_mode = \"spoke\" requires var.hub to be set."
+  }
+}
+
+check "private_ip_needs_external_connectivity" {
+  assert {
+    condition     = !local.use_private_ip || local.is_spoke
+    error_message = "access_mode = \"private_ip\" is only supported when deployment_mode = \"spoke\" (no bastion / public IP is created, so reachability must come from a peered hub VNet)."
+  }
+}
+

@@ -36,6 +36,8 @@ left unmocked: they're local-only (no network, no credentials) and the
 - [locals.tftest.hcl](locals.tftest.hcl)
   - subnet CIDR math under default and custom `vnet_address_space`
   - `access_mode` -> `use_bastion` / `use_public_ip` resolution
+    (the new `use_private_ip` flag and `deployment_mode` / `is_spoke`
+    toggles are not yet covered — see *Good candidates to add*)
   - `AzureBastionSubnet` is conditionally included only in bastion mode
   - `naming_token` / `naming_token_compact` derivation and length ceiling
 

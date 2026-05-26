@@ -79,6 +79,13 @@ az keyvault secret show \
   --query value -o tsv
 ```
 
+> In `access_mode = "private_ip"` the Key Vault has public access
+> disabled (`public_network_access_enabled = false`). The `az` call above
+> only succeeds when run from a network with a path to the spoke's KV
+> private endpoint and DNS that resolves the vault FQDN to the PE — e.g.
+> a hub jumpbox, ExpressRoute / VPN, or a peered spoke. See
+> [known-gaps.md](known-gaps.md#key-vault-reachability-in-private_ip-mode).
+
 Open the web UI per the mode you deployed in
 (see [access-modes.md](access-modes.md)) and sign in with those
 credentials. The subscription should already be listed under

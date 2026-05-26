@@ -1,9 +1,16 @@
 # cyclecloud_as_code
 
 Terraform that stands up an isolated **Azure CycleCloud** test bench: a hardened
-single-VM CycleCloud server (Ubuntu 24.04) with a supporting VNet, Bastion,
+single-VM CycleCloud server (Ubuntu 24.04) with a supporting VNet,
 Key Vault, Log Analytics + AMPLS, private storage, and the IAM plumbing needed
-for CycleCloud to manage compute resources in the same subscription.
+for CycleCloud to manage compute resources in the same subscription. Operator
+access defaults to a Standard public IP locked down to the caller's IP;
+Azure Bastion is available as an opt-in alternative
+(`-var access_mode=bastion`). The same module can also be deployed as a
+**spoke in a hub-and-spoke landing zone** with central DNS, central Log
+Analytics, VNet peering, and a fully private VM
+(`-var deployment_mode=spoke -var access_mode=private_ip`) — see
+[docs/hub-spoke.md](docs/hub-spoke.md).
 
 > Scope: developer / lab environment. Not production-hardened (single region,
 > no HA, minimal NSG coverage — only the `server` and `AzureBastionSubnet`
@@ -17,12 +24,13 @@ for CycleCloud to manage compute resources in the same subscription.
 | [terraform/network.tf](terraform/network.tf) | VNet `10.150.0.0/16`, four subnets via `for_each` over `local.subnets`, NSG on the `server` subnet, NSG on `AzureBastionSubnet` (bastion mode only) |
 | [terraform/natgateway.tf](terraform/natgateway.tf) | NAT Gateway + public IP, attached to the `cluster` and `server` subnets |
 | [terraform/bastion.tf](terraform/bastion.tf) | Standard SKU Bastion with tunneling enabled (only when `access_mode = "bastion"`) |
-| [terraform/keyvault.tf](terraform/keyvault.tf) | RBAC-mode Key Vault holding an ephemeral ED25519 SSH key pair (write-only secrets) and an auto-generated CycleCloud web-UI admin password, plus a `time_sleep` to wait for the caller's KV Administrator RBAC assignment to propagate before secrets are written. **`network_acls.default_action` is currently `Allow`** (see [docs/known-gaps.md](docs/known-gaps.md#key-vault-firewall)); the `ip_rules` list (configured + auto-detected operator IP) is computed but not enforcing |
+| [terraform/peering.tf](terraform/peering.tf) | VNet peering (spoke→hub always, hub→spoke via aliased `azurerm.hub` provider unless opted out) — only when `deployment_mode = "spoke"`. See [docs/hub-spoke.md](docs/hub-spoke.md) |
+| [terraform/keyvault.tf](terraform/keyvault.tf) | RBAC-mode Key Vault holding an ephemeral ED25519 SSH key pair (write-only secrets) and an auto-generated CycleCloud web-UI admin password, plus a `time_sleep` to wait for the caller's KV Administrator RBAC assignment to propagate before secrets are written. In `access_mode = "public_ip"` / `"bastion"`: `network_acls.default_action = "Allow"` with computed `ip_rules` (not enforcing — see [docs/known-gaps.md](docs/known-gaps.md#key-vault-firewall)). In `access_mode = "private_ip"`: `public_network_access_enabled = false` and `default_action = "Deny"` — KV is PE-only (see [docs/known-gaps.md](docs/known-gaps.md#key-vault-reachability-in-private_ip-mode)) |
 | [terraform/ssh.tf](terraform/ssh.tf) | `ephemeral.tls_private_key` (ED25519) + `ephemeral.tls_public_key` — in-memory key pair that is never written to state; only the Key Vault secrets persist |
-| [terraform/monitoring.tf](terraform/monitoring.tf) | Log Analytics workspace, linked storage account (private-only), `azurerm_log_analytics_linked_storage_account`, diagnostic settings for Key Vault / VM / monitoring storage blob+table services |
-| [terraform/locker.tf](terraform/locker.tf) | Dedicated CycleCloud locker storage account (LRS, RBAC-only, public network disabled) with a private `cyclecloud` blob container and diagnostic settings forwarded to the shared workspace — isolated from the monitoring SA so locker churn doesn't pollute diagnostic logs and the VM identity's blob-data RBAC stays scoped to one account |
+| [terraform/monitoring.tf](terraform/monitoring.tf) | Log Analytics workspace, linked storage account (private-only), `azurerm_log_analytics_linked_storage_account`, diagnostic settings for Key Vault / VM / monitoring storage blob+table services. The LA workspace, monitoring SA, and linked-SA association are gated on `deployment_mode = "standalone"`; in spoke mode the diagnostic settings route to `var.hub.monitoring.log_analytics_workspace_id` instead |
+| [terraform/locker.tf](terraform/locker.tf) | Dedicated CycleCloud locker storage account (LRS, RBAC-only, public network disabled) with a private `cyclecloud` blob container and diagnostic settings forwarded to the effective Log Analytics workspace — isolated from the monitoring SA so locker churn doesn't pollute diagnostic logs and the VM identity's blob-data RBAC stays scoped to one account |
 | [terraform/files.tf](terraform/files.tf) | Premium FileStorage account hosting two NFSv4.1 shares (`sched`, `shared`) for downstream Slurm scheduler state and cluster-wide shared data. Public network disabled, shared-access keys disabled (NFSv4.1 doesn't use them), HTTPS-only disabled (NFS is not HTTPS). Shares are provisioned at the Premium 100 GiB minimum quota (the dev-environment intent is ~10 GiB each). Reached over port 2049 via the file PE in private_endpoints.tf |
-| [terraform/private_endpoints.tf](terraform/private_endpoints.tf) | Private DNS zones, VNet links, AMPLS scope + scoped service, PEs for Key Vault, monitoring storage (blob + table), locker storage (blob), NFS file storage (file), AMPLS |
+| [terraform/private_endpoints.tf](terraform/private_endpoints.tf) | Private endpoints for Key Vault, locker storage (blob), and NFS file storage (file) — always created. In standalone mode also creates private DNS zones, VNet links, AMPLS scope + scoped service + PE, and PEs for the monitoring storage (blob + table). In spoke mode the local DNS zones and AMPLS chain are skipped (hub owns them), and the PEs created here omit their `private_dns_zone_group` so hub Azure Policy can register A-records into the central zones — see [docs/hub-spoke.md](docs/hub-spoke.md) |
 | [terraform/cyclecloud.tf](terraform/cyclecloud.tf) | Ubuntu 24.04 managed OS disk built `FromImage`, NIC in `server` subnet, VM with `SystemAssigned + UserAssigned` identity, cloud-init rendered from [scripts/cloud-config.yaml.tftpl](scripts/cloud-config.yaml.tftpl) via `templatefile()`, Azure Monitor Linux Agent (`AzureMonitorLinuxAgent`) VM extension, boot diagnostics on Azure-managed storage; optional public IP + NSG on the NIC when `access_mode = "public_ip"` |
 | [terraform/roles.tf](terraform/roles.tf) | Custom **CycleCloud Orchestrator Role `<naming_token>`** assigned at subscription scope to **both** the VM's system-assigned identity and the user-assigned identity (`azurerm_user_assigned_identity.cyclecloud`, attached to the VM and reserved for cluster-node use). Key Vault Administrator for caller, Key Vault Secrets User + Storage Blob Data Contributor (scoped to the dedicated locker SA) for the VM identity, Storage Blob + Table Data Contributor for the LA workspace identity on the monitoring SA |
 | [terraform/locals.tf](terraform/locals.tf) | Subnet CIDR math via `cidrsubnet`, tag merging, DNS zone catalogs, `naming_token` / `naming_token_compact` (drive every resource name) |
@@ -44,9 +52,14 @@ for CycleCloud to manage compute resources in the same subscription.
 ## Architecture
 
 The diagram below shows the Azure resources created by a single `terraform
-apply` and how they wire together. Dashed components are conditional on
-`var.access_mode` (Bastion vs. direct public IP); everything else is deployed
-unconditionally.
+apply` **in standalone mode**. Dashed components are conditional on
+`var.access_mode` (Bastion vs. direct public IP); the rest are deployed
+unconditionally in standalone mode. In `deployment_mode = "spoke"` mode
+the monitoring infrastructure (Log Analytics, AMPLS, monitoring SA) and
+local private DNS zones are NOT created — the spoke reuses hub-provided
+equivalents and adds VNet peering. With `access_mode = "private_ip"`
+(spoke-only) the VM has no public IP and no Bastion. See
+[docs/hub-spoke.md](docs/hub-spoke.md) for the spoke topology.
 
 ```mermaid
 flowchart LR
@@ -157,9 +170,11 @@ flowchart LR
     pdns -. resolves .- peFiles
     pdns -. resolves .- peAmpls
 
-    %% KV firewall is default-Allow today, so the operator's data-plane calls
-    %% reach KV directly over the Internet (no IP filtering enforced)
-    operator -. "KV data plane<br/>(default-Allow today;<br/>IP list computed but<br/>not enforcing)" .- kv
+    %% In access_mode public_ip / bastion the KV firewall is default-Allow,
+    %% so the operator's data-plane calls reach KV directly over the
+    %% Internet (no IP filtering enforced). In access_mode private_ip
+    %% (spoke only) KV is PE-only and this path goes via the hub.
+    operator -. "KV data plane<br/>(public_ip/bastion: default-Allow,<br/>IP list computed but not enforcing.<br/>private_ip: PE-only)" .- kv
 
     %% Identity / RBAC
     vm -- "system MI" --> customRole
@@ -235,7 +250,8 @@ In-depth operator documentation lives in [docs/](docs/README.md):
 
 - [Prerequisites](docs/prerequisites.md) — tooling, Azure permissions, network access, provider auth.
 - [Deploying](docs/deploying.md) — clone, configure tfvars, `terraform init / plan / apply`.
-- [Access modes](docs/access-modes.md) — choosing between `bastion` and `public_ip`; opening the web UI.
+- [Access modes](docs/access-modes.md) — choosing between `public_ip`, `bastion`, and `private_ip` (spoke only); opening the web UI.
+- [Hub-and-spoke](docs/hub-spoke.md) — deploying as a spoke with central DNS, central Log Analytics, VNet peering, and `access_mode = "private_ip"`.
 - [SSH private key](docs/ssh-key.md) — pulling the key from Key Vault and using it with `ssh` / `ssh-agent` / Bastion tunneling.
 - [Variables](docs/variables.md) — every input variable + the naming convention.
 - [Post-deploy](docs/post-deploy.md) — what the cloud-init bootstrap does, how to verify it, how to log in.

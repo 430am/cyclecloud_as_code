@@ -4,8 +4,9 @@ How to reach the CycleCloud server VM. Controlled by `var.access_mode`.
 
 | Mode | VM has public IP? | Bastion deployed? | Inbound source |
 |---|---|---|---|
-| `bastion` (default) | no | yes (Standard SKU, tunneling enabled) | `VirtualNetwork` only (via Bastion) |
-| `public_ip` | yes (Standard) | no | `var.allowed_ip_addresses` + auto-detected operator IP (server-subnet NSG only) |
+| `public_ip` (default) | yes (Standard) | no | `var.allowed_ip_addresses` + auto-detected operator IP (server-subnet NSG only) |
+| `bastion` | no | yes (Standard SKU, tunneling enabled) | `VirtualNetwork` only (via Bastion) |
+| `private_ip` | no | no | `VirtualNetwork` only (via hub peering — see [hub-spoke.md](hub-spoke.md)). Requires `deployment_mode = "spoke"`. |
 
 A single server-subnet NSG (`azurerm_network_security_group.server` in
 [terraform/network.tf](../terraform/network.tf)) enforces inbound for every
@@ -28,7 +29,7 @@ package install ships without a self-signed cert -- see
 SSH is on 22 as usual. The server-subnet NSG allows 22/8080/8443 (8443 is
 pre-opened for when you do enable TLS).
 
-## Option A: Bastion (`access_mode = "bastion"`)
+## Option B: Bastion (`access_mode = "bastion"`)
 
 Use Bastion + Azure CLI tunneling (Standard SKU, `tunneling_enabled = true`):
 
@@ -53,7 +54,7 @@ Bastion-to-VM hop inside the tunnel is plaintext HTTP.
 
 For SSH over Bastion, see [ssh-key.md](ssh-key.md#2c-ssh-over-azure-bastion-tunneling).
 
-## Option B: Public IP (`access_mode = "public_ip"`)
+## Option A: Public IP (`access_mode = "public_ip"`, default)
 
 The VM gets a Standard public IP; the server-subnet NSG restricts
 inbound on 22/8080/8443 to `var.allowed_ip_addresses` (plus the

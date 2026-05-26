@@ -1,5 +1,9 @@
+# Private DNS zones + zone links are only managed locally in standalone mode.
+# In spoke mode the hub owns these zones; the hub team links this spoke's
+# VNet out-of-band, and PE A-records are registered into the hub zones by
+# Azure Policy (see docs/hub-spoke.md).
 resource "azurerm_private_dns_zone" "zones" {
-  for_each = toset(local.private_dns_names)
+  for_each = local.manage_local_dns ? toset(local.private_dns_names) : toset([])
 
   name                = each.key
   resource_group_name = azurerm_resource_group.testing.name
@@ -9,7 +13,7 @@ resource "azurerm_private_dns_zone" "zones" {
 resource "azurerm_private_dns_zone_virtual_network_link" "zones" {
   depends_on = [azurerm_private_dns_zone.zones]
 
-  for_each = toset(local.private_dns_names)
+  for_each = local.manage_local_dns ? toset(local.private_dns_names) : toset([])
 
   name                  = "${each.key}-link"
   private_dns_zone_name = each.value
@@ -17,33 +21,41 @@ resource "azurerm_private_dns_zone_virtual_network_link" "zones" {
   virtual_network_id    = azurerm_virtual_network.cyclecloud.id
 }
 
+# AMPLS + its scoped service + PE only exist in standalone. In spoke mode the
+# hub's AMPLS (if any) is expected to cover the hub LA workspace, and the
+# AMA / private link bits for this spoke's VM are out of scope for this
+# module.
 resource "azurerm_monitor_private_link_scope" "ampls" {
+  count                 = local.manage_local_monitoring ? 1 : 0
   name                  = "${local.naming_token}-ampls"
   resource_group_name   = azurerm_resource_group.testing.name
   ingestion_access_mode = "PrivateOnly"
 }
 
 resource "azurerm_monitor_private_link_scoped_service" "ampls" {
+  count = local.manage_local_monitoring ? 1 : 0
   # Both this resource and azurerm_log_analytics_linked_storage_account.monitoring
   # mutate the same Log Analytics workspace. Running them in parallel produces
   # `ConflictingConcurrentWriteNotAllowed` (409) from the LA control plane, so
   # serialize by waiting for the linked storage account to finish first.
   depends_on = [azurerm_log_analytics_linked_storage_account.monitoring]
 
-  linked_resource_id  = azurerm_log_analytics_workspace.monitoring.id
+  linked_resource_id  = azurerm_log_analytics_workspace.monitoring[0].id
   name                = "${local.naming_token}-ampls-svc"
   resource_group_name = azurerm_resource_group.testing.name
-  scope_name          = azurerm_monitor_private_link_scope.ampls.name
+  scope_name          = azurerm_monitor_private_link_scope.ampls[0].name
 }
 
 ## Sleep is necessary before creating private endpoints to ensure the scope is fully provisioned
 resource "time_sleep" "ampls_wait" {
+  count      = local.manage_local_monitoring ? 1 : 0
   depends_on = [azurerm_monitor_private_link_scope.ampls]
 
   create_duration = "60s"
 }
 
 resource "azurerm_private_endpoint" "ampls" {
+  count      = local.manage_local_monitoring ? 1 : 0
   depends_on = [time_sleep.ampls_wait]
 
   location            = var.location
@@ -55,7 +67,7 @@ resource "azurerm_private_endpoint" "ampls" {
   private_service_connection {
     name                           = "${local.naming_token}-psc-ampls"
     is_manual_connection           = false
-    private_connection_resource_id = azurerm_monitor_private_link_scope.ampls.id
+    private_connection_resource_id = azurerm_monitor_private_link_scope.ampls[0].id
     subresource_names              = ["azuremonitor"]
   }
 
@@ -79,13 +91,19 @@ resource "azurerm_private_endpoint" "key_vault" {
     subresource_names              = ["vault"]
   }
 
-  private_dns_zone_group {
-    name                 = "${local.naming_token}-pdzg-kv"
-    private_dns_zone_ids = [azurerm_private_dns_zone.zones["privatelink.vaultcore.azure.net"].id]
+  dynamic "private_dns_zone_group" {
+    for_each = local.manage_pe_dns_zone_groups ? [1] : []
+    content {
+      name                 = "${local.naming_token}-pdzg-kv"
+      private_dns_zone_ids = [azurerm_private_dns_zone.zones["privatelink.vaultcore.azure.net"].id]
+    }
   }
 }
 
+# Linked-storage PEs only matter in standalone (the monitoring SA doesn't
+# exist in spoke mode).
 resource "azurerm_private_endpoint" "linked_storage_blob" {
+  count               = local.manage_local_monitoring ? 1 : 0
   location            = var.location
   name                = "${local.naming_token}-pe-linked-storage-blob"
   resource_group_name = azurerm_resource_group.testing.name
@@ -95,7 +113,7 @@ resource "azurerm_private_endpoint" "linked_storage_blob" {
   private_service_connection {
     is_manual_connection           = false
     name                           = "${local.naming_token}-psc-linked-storage-blob"
-    private_connection_resource_id = azurerm_storage_account.monitoring.id
+    private_connection_resource_id = azurerm_storage_account.monitoring[0].id
     subresource_names              = ["blob"]
   }
 
@@ -106,6 +124,7 @@ resource "azurerm_private_endpoint" "linked_storage_blob" {
 }
 
 resource "azurerm_private_endpoint" "linked_storage_table" {
+  count               = local.manage_local_monitoring ? 1 : 0
   location            = var.location
   name                = "${local.naming_token}-pe-linked-storage-table"
   resource_group_name = azurerm_resource_group.testing.name
@@ -115,7 +134,7 @@ resource "azurerm_private_endpoint" "linked_storage_table" {
   private_service_connection {
     is_manual_connection           = false
     name                           = "${local.naming_token}-psc-linked-storage-table"
-    private_connection_resource_id = azurerm_storage_account.monitoring.id
+    private_connection_resource_id = azurerm_storage_account.monitoring[0].id
     subresource_names              = ["table"]
   }
 
@@ -142,9 +161,12 @@ resource "azurerm_private_endpoint" "locker_blob" {
     subresource_names              = ["blob"]
   }
 
-  private_dns_zone_group {
-    name                 = "${local.naming_token}-pdzg-locker-blob"
-    private_dns_zone_ids = [azurerm_private_dns_zone.zones["privatelink.blob.core.windows.net"].id]
+  dynamic "private_dns_zone_group" {
+    for_each = local.manage_pe_dns_zone_groups ? [1] : []
+    content {
+      name                 = "${local.naming_token}-pdzg-locker-blob"
+      private_dns_zone_ids = [azurerm_private_dns_zone.zones["privatelink.blob.core.windows.net"].id]
+    }
   }
 }
 
@@ -172,8 +194,11 @@ resource "azurerm_private_endpoint" "files" {
     subresource_names              = ["file"]
   }
 
-  private_dns_zone_group {
-    name                 = "${local.naming_token}-pdzg-files"
-    private_dns_zone_ids = [azurerm_private_dns_zone.zones["privatelink.file.core.windows.net"].id]
+  dynamic "private_dns_zone_group" {
+    for_each = local.manage_pe_dns_zone_groups ? [1] : []
+    content {
+      name                 = "${local.naming_token}-pdzg-files"
+      private_dns_zone_ids = [azurerm_private_dns_zone.zones["privatelink.file.core.windows.net"].id]
+    }
   }
 }

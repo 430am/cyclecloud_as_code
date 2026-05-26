@@ -61,7 +61,7 @@ resource "azurerm_storage_share" "shared" {
 resource "azurerm_monitor_diagnostic_setting" "files" {
   name                       = "${local.naming_token}-diag-files"
   target_resource_id         = "${azurerm_storage_account.files.id}/fileServices/default"
-  log_analytics_workspace_id = azurerm_log_analytics_workspace.monitoring.id
+  log_analytics_workspace_id = local.effective_log_analytics_workspace_id
 
   enabled_log {
     category = "StorageRead"

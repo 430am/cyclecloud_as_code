@@ -78,38 +78,53 @@ the connection commands for each mode.
 
 | Value | VM public IP? | Bastion deployed? | Inbound source on the server NSG |
 |---|---|---|---|
-| `bastion` (default) | no | yes (Standard, tunneling enabled) | `VirtualNetwork` only |
-| `public_ip` | yes (Standard) | no | `VirtualNetwork` + `var.allowed_ip_addresses` (plus auto-detected operator IP) |
+| `public_ip` (default) | yes (Standard) | no | `VirtualNetwork` + `var.allowed_ip_addresses` (plus auto-detected operator IP) |
+| `bastion` | no | yes (Standard, tunneling enabled) | `VirtualNetwork` only |
+| `private_ip` | no | no | `VirtualNetwork` only (requires `deployment_mode = "spoke"` — see [hub-spoke.md](hub-spoke.md)) |
 
-**Bastion mode (default)** — no flags needed:
+**Public-IP mode (default)** — no flags needed; the operator's egress IP is
+auto-detected via ipify, so a solo deploy needs nothing else:
 
 ```bash
 terraform apply -var-file=environments/local.tfvars.hcl
 ```
 
-**Public-IP mode** — flip the mode on the CLI; the operator's egress IP is
-auto-detected via ipify, so no other flags are required for a solo deploy:
+**Bastion mode** — flip the mode on the CLI to deploy Azure Bastion
+instead of a public IP on the VM:
 
 ```bash
 terraform apply \
   -var-file=environments/local.tfvars.hcl \
-  -var 'access_mode=public_ip'
+  -var 'access_mode=bastion'
 ```
 
-To allow teammates / CI runners in addition to your own IP, set
-`allowed_ip_addresses` (either in the tfvars file or on the CLI):
+To allow teammates / CI runners in addition to your own IP (public-IP
+mode only), set `allowed_ip_addresses` (either in the tfvars file or on
+the CLI):
 
 ```bash
 terraform apply \
   -var-file=environments/local.tfvars.hcl \
-  -var 'access_mode=public_ip' \
   -var 'allowed_ip_addresses=["203.0.113.10","198.51.100.0/24"]'
 ```
 
 Switching modes after the first apply is supported and reasonably cheap:
-flipping `bastion` → `public_ip` destroys the Bastion host, its public IP,
-and the `AzureBastionSubnet`, and creates a VM public IP. The VM itself is
-not recreated. The reverse direction is symmetric.
+flipping `public_ip` → `bastion` destroys the VM public IP and creates a
+Bastion host, its public IP, and the `AzureBastionSubnet`. The VM itself
+is not recreated. The reverse direction is symmetric.
+
+**Spoke / `private_ip` mode** — for hub-and-spoke landing-zone deployments
+with central DNS, a hub Log Analytics workspace, and VNet peering. Copy
+[terraform/environments/spoke.tfvars.hcl](../terraform/environments/spoke.tfvars.hcl)
+to your own tfvars file, fill in the hub references, and apply:
+
+```bash
+terraform apply -var-file=environments/spoke.tfvars.hcl
+```
+
+See [hub-spoke.md](hub-spoke.md) for the full design — what the hub team
+must provide, RBAC required on both subscriptions, and how to opt out of
+the reverse peering when the hub manages their side themselves.
 
 ### `application_name` — naming token for every resource
 
@@ -160,7 +175,7 @@ precedence over earlier ones and over values in the tfvars file:
 terraform apply \
   -var-file=environments/local.tfvars.hcl \
   -var 'application_name=cc-dev' \
-  -var 'access_mode=public_ip' \
+  -var 'access_mode=bastion' \
   -var 'location=eastus2'
 ```
 

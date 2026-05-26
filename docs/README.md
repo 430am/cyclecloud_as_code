@@ -8,7 +8,8 @@ five-line quickstart; deeper how-tos and reference material live here.
 |---|---|
 | [prerequisites.md](prerequisites.md) | Setting up a fresh workstation or CI runner — Terraform version, Azure CLI auth, required RBAC, what `var.current_ip_address` is for |
 | [deploying.md](deploying.md) | Cloning the repo, authoring tfvars, and running `terraform init / plan / apply` |
-| [access-modes.md](access-modes.md) | Choosing between `bastion` and `public_ip`, opening the web UI |
+| [access-modes.md](access-modes.md) | Choosing between `bastion`, `public_ip`, and `private_ip`, opening the web UI |
+| [hub-spoke.md](hub-spoke.md) | Deploying as a spoke in a hub-and-spoke landing zone (central DNS, central LA, VNet peering, `access_mode = "private_ip"`) |
 | [ssh-key.md](ssh-key.md) | Pulling the generated SSH private key out of Key Vault and using it with `ssh` / `ssh-agent` / Bastion tunneling |
 | [variables.md](variables.md) | Reference for every input variable and the naming convention applied to each resource |
 | [post-deploy.md](post-deploy.md) | What the cloud-init bootstrap does, how to verify it finished, and how to log into the CycleCloud web UI |

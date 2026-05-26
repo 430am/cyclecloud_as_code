@@ -70,19 +70,114 @@ variable "vnet_address_space" {
 variable "access_mode" {
   description = <<-EOT
     How to reach the CycleCloud server VM:
-      - "bastion"   : deploy Azure Bastion (Standard, tunneling enabled); VM has no public IP.
-      - "public_ip" : attach a Standard public IP to the VM NIC. The server-subnet
-                      NSG allows SSH (22), HTTP (8080) and HTTPS (8443) inbound from
-                      every entry in var.allowed_ip_addresses (plus the auto-detected
-                      operator IP). Note: CycleCloud only binds 8443 once a TLS
-                      keystore is configured -- see docs/known-gaps.md.
+      - "public_ip" (default): attach a Standard public IP to the VM NIC.
+                      The server-subnet NSG allows SSH (22), HTTP (8080) and
+                      HTTPS (8443) inbound from every entry in
+                      var.allowed_ip_addresses (plus the auto-detected
+                      operator IP). Note: CycleCloud only binds 8443 once a
+                      TLS keystore is configured -- see docs/known-gaps.md.
                       No Bastion / AzureBastionSubnet is deployed.
+      - "bastion"   : deploy Azure Bastion (Standard, tunneling enabled);
+                      VM has no public IP.
+      - "private_ip": no public IP, no Bastion. The VM is reachable only on
+                      its private IP from the VNet (or anything peered to
+                      it, e.g. a hub jumpbox / ExpressRoute / VPN). The
+                      operator-IP NSG rule and the KV firewall caller-IP
+                      entries are NOT created in this mode; Key Vault
+                      public network access is disabled. Intended for
+                      hub-and-spoke landing-zone deployments where access
+                      flows in over peering. See docs/hub-spoke.md.
   EOT
   type        = string
-  default     = "bastion"
+  default     = "public_ip"
 
   validation {
-    condition     = contains(["bastion", "public_ip"], var.access_mode)
-    error_message = "access_mode must be either \"bastion\" or \"public_ip\"."
+    condition     = contains(["bastion", "public_ip", "private_ip"], var.access_mode)
+    error_message = "access_mode must be one of \"bastion\", \"public_ip\", or \"private_ip\"."
+  }
+}
+
+variable "deployment_mode" {
+  description = <<-EOT
+    Topology this stack is being deployed into:
+      - "standalone" (default): self-contained deployment. Creates its own
+                       Log Analytics workspace, AMPLS, private DNS zones,
+                       monitoring storage account, etc. No peering.
+      - "spoke"      : deploy as a spoke in an existing hub-and-spoke
+                       landing zone. Skips creating local Log Analytics /
+                       AMPLS / monitoring storage / private DNS zones;
+                       reuses the hub workspace for diagnostics and
+                       creates VNet peering to the hub. Private endpoints
+                       are still created but their DNS A-records are
+                       expected to be registered by hub-managed Azure
+                       Policy (the "DNS zone group for private endpoint"
+                       policy). Requires var.hub to be set. See
+                       docs/hub-spoke.md.
+  EOT
+  type        = string
+  default     = "standalone"
+
+  validation {
+    condition     = contains(["standalone", "spoke"], var.deployment_mode)
+    error_message = "deployment_mode must be either \"standalone\" or \"spoke\"."
+  }
+}
+
+variable "hub" {
+  description = <<-EOT
+    Reference to the hub landing-zone resources this spoke consumes. Required
+    when deployment_mode = "spoke"; ignored otherwise.
+
+    Fields:
+      subscription_id        - Azure subscription ID hosting the hub VNet /
+                               Log Analytics workspace. Used to configure
+                               the aliased `azurerm.hub` provider.
+      tenant_id              - (optional) Hub tenant ID. Only required if
+                               the hub lives in a different tenant.
+      virtual_network.id     - Full resource ID of the hub VNet to peer with.
+      virtual_network.allow_forwarded_traffic
+                             - (default true) Sets allow_forwarded_traffic
+                               on both peering sides. Required when a hub
+                               firewall forwards spoke-originated traffic.
+      virtual_network.use_remote_gateways
+                             - (default false) Set true if the hub has an
+                               ExpressRoute / VPN gateway you want the
+                               spoke to use for on-prem connectivity. Hub
+                               peering side automatically sets
+                               allow_gateway_transit = true in that case.
+      virtual_network.create_reverse_peering
+                             - (default true) When true, the hub->spoke
+                               peering is created via the aliased
+                               `azurerm.hub` provider. Set false if the
+                               hub team manages their side out-of-band
+                               (you only need Network Contributor on the
+                               spoke VNet in that case).
+      monitoring.log_analytics_workspace_id
+                             - Full resource ID of the hub Log Analytics
+                               workspace. All spoke diagnostic settings
+                               target this workspace.
+  EOT
+  type = object({
+    subscription_id = string
+    tenant_id       = optional(string)
+    virtual_network = object({
+      id                      = string
+      allow_forwarded_traffic = optional(bool, true)
+      use_remote_gateways     = optional(bool, false)
+      create_reverse_peering  = optional(bool, true)
+    })
+    monitoring = object({
+      log_analytics_workspace_id = string
+    })
+  })
+  default = null
+
+  validation {
+    condition = var.hub == null || (
+      can(regex("^[0-9a-fA-F-]{36}$", var.hub.subscription_id)) &&
+      can(regex("^/subscriptions/[^/]+/resourceGroups/[^/]+/providers/Microsoft.Network/virtualNetworks/[^/]+$", var.hub.virtual_network.id)) &&
+      can(regex("^/subscriptions/[^/]+/resourceGroups/[^/]+/providers/Microsoft.OperationalInsights/workspaces/[^/]+$", var.hub.monitoring.log_analytics_workspace_id))
+    )
+    error_message = "hub.subscription_id must be a GUID; hub.virtual_network.id must be a full Microsoft.Network/virtualNetworks resource ID; hub.monitoring.log_analytics_workspace_id must be a full Microsoft.OperationalInsights/workspaces resource ID."
   }
 }

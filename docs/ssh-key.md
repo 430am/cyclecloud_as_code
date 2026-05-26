@@ -35,13 +35,22 @@ It `cd`s into `../terraform` so `terraform output` resolves, writes
 `terraform apply` or whenever you need to re-pull the key onto a new
 workstation.
 
-> Note: the Key Vault firewall is currently `default_action = "Allow"`
+> Note: in `access_mode = "public_ip"` / `"bastion"` the Key Vault
+> firewall is currently `default_action = "Allow"`
 > (see [known-gaps.md](known-gaps.md#key-vault-firewall)), so the
 > `az keyvault secret show` call above succeeds from any source IP. The
 > `ip_rules` allow list (configured + auto-detected operator IP via
 > `data.http.current_ip`) is still computed in
 > [terraform/locals.tf](../terraform/locals.tf) so that tightening
 > `default_action` back to `Deny` is a one-line change.
+>
+> In `access_mode = "private_ip"` the vault has
+> `public_network_access_enabled = false` and `default_action = "Deny"`,
+> so this `az` call only works from a network with a path to the spoke's
+> KV private endpoint (hub jumpbox, ExpressRoute, VPN, peered VNet) and
+> DNS that resolves `<vault>.vault.azure.net` to the PE. See
+> [known-gaps.md](known-gaps.md#key-vault-reachability-in-private_ip-mode)
+> and [hub-spoke.md](hub-spoke.md#reaching-the-vm-and-kv-from-your-workstation).
 
 ## 2a. Use the key for a single SSH command
 
@@ -53,6 +62,18 @@ IP=$(terraform output -raw cyclecloud_vm_public_ip)   # public_ip mode only
 
 ssh -i ~/.ssh/cyclecloud.pem "$ADMIN@$IP"
 ```
+
+In `access_mode = "private_ip"` there is no public IP. Use the private IP
+instead, and run `ssh` from a host with network reachability to the spoke
+VNet (hub jumpbox, ExpressRoute / VPN, peered spoke):
+
+```bash
+PRIV=$(terraform output -raw cyclecloud_vm_private_ip)
+ssh -i ~/.ssh/cyclecloud.pem "$ADMIN@$PRIV"
+```
+
+See [hub-spoke.md](hub-spoke.md#reaching-the-vm-and-kv-from-your-workstation)
+for the network setup options.
 
 ## 2b. Load the key into `ssh-agent` for the rest of your session
 

@@ -45,3 +45,17 @@ provider "azurerm" {
   storage_use_azuread = true
   features {}
 }
+
+# Aliased provider for cross-subscription writes against the hub (peering
+# reverse side). Only used when var.deployment_mode = "spoke" AND
+# var.hub.virtual_network.create_reverse_peering = true. In standalone mode
+# the alias still has to be configured (Terraform requires it once declared),
+# so we fall back to the default subscription / tenant.
+provider "azurerm" {
+  alias               = "hub"
+  storage_use_azuread = true
+  features {}
+
+  subscription_id = try(var.hub.subscription_id, null)
+  tenant_id       = try(var.hub.tenant_id, null)
+}

@@ -8,15 +8,22 @@ resource "azurerm_key_vault" "cyclecloud" {
   soft_delete_retention_days = 7
   rbac_authorization_enabled = true
 
+  # In private_ip mode the vault is reached exclusively via its private
+  # endpoint -- disable public network access entirely. In bastion / public_ip
+  # standalone deployments the operator's terraform run hits the data plane
+  # over the public endpoint, so leave PNA enabled and gate it via firewall.
+  public_network_access_enabled = !local.use_private_ip
+
   network_acls {
-    default_action = "Allow"
-    bypass         = "AzureServices"
-    # Always allow the operator's live public IP in addition to any configured
-    # entries, so `terraform plan`/`apply`/`destroy` can reach the data plane
+    # private_ip mode: vault is closed to the Internet, ip_rules is unused.
+    # Other modes: allow the operator's live public IP plus any configured
+    # entries so `terraform plan`/`apply`/`destroy` can reach the data plane
     # even if the caller's egress IP has changed since the last apply (the
     # secret resources do a data-plane Read on every refresh). KV ip_rules
     # accepts both bare IPs and CIDRs; allowed_source_ips normalizes to /32.
-    ip_rules = local.allowed_source_ips
+    default_action = local.use_private_ip ? "Deny" : "Allow"
+    bypass         = "AzureServices"
+    ip_rules       = local.use_private_ip ? [] : local.allowed_source_ips
   }
 }
 

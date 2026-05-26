@@ -69,8 +69,8 @@ output "cyclecloud_locker_container" {
 }
 
 output "log_analytics_workspace_id" {
-  description = "Resource ID of the Log Analytics workspace."
-  value       = azurerm_log_analytics_workspace.monitoring.id
+  description = "Resource ID of the Log Analytics workspace receiving diagnostic settings (the local workspace in standalone mode, var.hub.monitoring.log_analytics_workspace_id in spoke mode)."
+  value       = local.effective_log_analytics_workspace_id
 }
 
 output "cyclecloud_orchestrator_role_name" {
@@ -113,9 +113,20 @@ output "subnet_cidrs" {
 output "effective_access_flags" {
   description = "Resolved access-mode booleans derived from var.access_mode."
   value = {
-    use_bastion   = local.use_bastion
-    use_public_ip = local.use_public_ip
+    use_bastion    = local.use_bastion
+    use_public_ip  = local.use_public_ip
+    use_private_ip = local.use_private_ip
   }
+}
+
+output "deployment_mode" {
+  description = "Active deployment mode (\"standalone\" or \"spoke\")."
+  value       = var.deployment_mode
+}
+
+output "virtual_network_id" {
+  description = "Resource ID of this stack's VNet (useful for out-of-band hub peering / DNS zone links)."
+  value       = azurerm_virtual_network.cyclecloud.id
 }
 
 output "naming_tokens" {

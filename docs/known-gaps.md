@@ -15,9 +15,10 @@ Internet-facing allow rules.
 
 ## Key Vault firewall
 
-`network_acls.default_action` is currently **`Allow`** — a temporary
-workaround to keep `terraform destroy` and operator
-`az keyvault secret show` calls working regardless of egress IP.
+In `access_mode` = `public_ip` / `bastion`, `network_acls.default_action`
+is currently **`Allow`** -- a temporary workaround to keep
+`terraform destroy` and operator `az keyvault secret show` calls working
+regardless of egress IP.
 
 The enforcing path is fully wired:
 `default_action = "Deny"` + `ip_rules = local.allowed_source_ips`,
@@ -27,9 +28,57 @@ where the list is the union of `var.allowed_ip_addresses` and
 [terraform/keyvault.tf](../terraform/keyvault.tf)). Flipping the action
 back to `Deny` re-enables the IP allow-list.
 
-**TODO**: revert once the destroy-time / CI access story is resolved (CI
-needs egress to `api.ipify.org` for the auto-detection, or a static
-service-principal-IP allow list).
+In `access_mode = "private_ip"` this gap does not apply: the vault is
+set to `public_network_access_enabled = false` with `default_action = "Deny"`
+automatically -- but that introduces its own reachability requirement;
+see [Key Vault reachability in private_ip mode](#key-vault-reachability-in-private_ip-mode).
+
+**TODO**: revert public_ip / bastion modes to `Deny` once the destroy-time
+/ CI access story is resolved (CI needs egress to `api.ipify.org` for the
+auto-detection, or a static service-principal-IP allow list).
+
+## Key Vault reachability in `private_ip` mode
+
+When `access_mode = "private_ip"` (or any spoke deployment that pins it),
+[terraform/keyvault.tf](../terraform/keyvault.tf) sets
+`public_network_access_enabled = false` and `network_acls.default_action = "Deny"`.
+The vault is then reachable only through its private endpoint in the
+`private_endpoint` subnet ([terraform/private_endpoints.tf](../terraform/private_endpoints.tf)).
+
+That changes what the **operator's terraform run** needs:
+
+- `azurerm_key_vault_secret.{private_key,public_key,cyclecloud_admin_password}`
+  and the `data.azurerm_key_vault_secret.public_key` lookup all hit the KV
+  **data plane** (`<vault>.vault.azure.net`), not the ARM control plane.
+  With public access off, the runner needs a network path to the PE IP
+  AND DNS that resolves the vault FQDN to that IP.
+- Same for [post-config/downloadSSH.sh](../post-config/downloadSSH.sh)
+  and any `az keyvault secret show` the operator runs by hand.
+
+Practical requirements:
+
+1. **Network path** -- run terraform / `az` from somewhere with line of
+   sight to the spoke's `private_endpoint` subnet: a jumpbox / dev VM in
+   the hub or another peered spoke, an ExpressRoute / VPN connection into
+   the hub, or a CI runner deployed into a peered VNet.
+2. **DNS resolution** -- the runner's resolver must return the PE's
+   private IP for `<vault>.vault.azure.net`. In a typical ALZ that means
+   the hub-managed `privatelink.vaultcore.azure.net` zone is linked to
+   the spoke (or to the runner's VNet) and Azure Policy has registered
+   the spoke PE into it. From outside Azure, point the resolver at the
+   Azure DNS Private Resolver / a hub-side DNS forwarder.
+
+Failure mode if either is missing: `terraform apply` / `destroy` /
+refresh fails with `403 Forbidden` (path exists, firewall denied) or a
+TLS / connect-timeout error against the public KV endpoint (DNS still
+resolved to the public IP). Both are recoverable -- fix the path / DNS
+and re-run; no state changes are persisted on failure.
+
+**Mitigation if you cannot route to the PE during apply**: temporarily
+flip `access_mode` to `bastion` or `public_ip` for the initial apply,
+then switch to `private_ip` once secrets are written and the cluster is
+up. Switching access modes does not recreate the VM (see
+[docs/deploying.md](deploying.md)).
 
 ## `data.http.current_ip` requires outbound HTTPS to api.ipify.org
 
@@ -91,13 +140,17 @@ Phase 1 (this repo) ends with the subscription registered. Adding
 full one-shot SLURM/PBS deployment — see the marconetto/azadventures
 chapter11 script for the pattern.
 
-## Single subscription
+## Single subscription (standalone mode)
 
-Earlier scaffolding referenced aliased `workload_subscription` /
-`hub_subscription` providers; the current config is single-subscription.
-If a hub/spoke split is needed, re-introduce those aliases in
-[terraform/providers.tf](../terraform/providers.tf) and corresponding
-`var.*_subscription_id` inputs.
+Standalone deployments (`deployment_mode = "standalone"`) are
+single-subscription -- everything goes into the subscription the default
+`azurerm` provider is bound to.
+
+Spoke deployments (`deployment_mode = "spoke"`) DO split across two
+subscriptions: the default provider for the spoke, plus the aliased
+`azurerm.hub` provider for the hub-side peering write. See
+[docs/hub-spoke.md](hub-spoke.md) and
+[terraform/providers.tf](../terraform/providers.tf).
 
 ## No backend configured
 

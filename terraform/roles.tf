@@ -98,11 +98,14 @@ resource "azurerm_role_assignment" "key_vault" {
 }
 
 resource "azurerm_role_assignment" "monitoring" {
-  for_each = toset(["Storage Blob Data Contributor", "Storage Table Data Contributor"])
+  # The local LA workspace and its linked storage only exist in standalone
+  # mode; in spoke mode the hub workspace handles ingestion and this role
+  # assignment is the hub team's responsibility.
+  for_each = local.manage_local_monitoring ? toset(["Storage Blob Data Contributor", "Storage Table Data Contributor"]) : toset([])
 
-  principal_id         = azurerm_log_analytics_workspace.monitoring.identity[0].principal_id
+  principal_id         = azurerm_log_analytics_workspace.monitoring[0].identity[0].principal_id
   role_definition_name = each.key
-  scope                = azurerm_storage_account.monitoring.id
+  scope                = azurerm_storage_account.monitoring[0].id
 }
 
 # CycleCloud VM's system-assigned identity needs to:

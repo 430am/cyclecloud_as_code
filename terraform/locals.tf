@@ -17,8 +17,26 @@ locals {
     if length(trimspace(ip)) > 0
   ])
 
-  use_bastion   = var.access_mode == "bastion"
-  use_public_ip = var.access_mode == "public_ip"
+  use_bastion    = var.access_mode == "bastion"
+  use_public_ip  = var.access_mode == "public_ip"
+  use_private_ip = var.access_mode == "private_ip"
+
+  is_spoke = var.deployment_mode == "spoke"
+
+  # Spoke mode delegates DNS + monitoring to the hub. Toggle every local
+  # creation off the same booleans so flipping deployment_mode is one knob.
+  manage_local_dns        = !local.is_spoke
+  manage_local_monitoring = !local.is_spoke
+
+  # Single source of truth for every diagnostic setting: the local LA in
+  # standalone, the hub LA in spoke mode.
+  effective_log_analytics_workspace_id = local.is_spoke ? var.hub.monitoring.log_analytics_workspace_id : azurerm_log_analytics_workspace.monitoring[0].id
+
+  # Whether a created private endpoint should attach a private_dns_zone_group
+  # locally. In spoke mode we omit it and rely on the hub's Azure Policy
+  # ("DNS zone group for private endpoint") to register A-records into the
+  # hub-managed zones. See docs/hub-spoke.md.
+  manage_pe_dns_zone_groups = local.manage_local_dns
 
   # Naming token used as the leading `<product>` segment in every resource
   # name. Falls back to `random_pet.naming.id` when `var.application_name` is
