@@ -110,6 +110,15 @@ resource "azurerm_virtual_machine_extension" "ama" {
   virtual_machine_id         = azurerm_linux_virtual_machine.cyclecloud.id
   auto_upgrade_minor_version = true
   automatic_upgrade_enabled  = true
+
+  # AMA's first enable on Ubuntu 24.04 occasionally trips a "JSON exception
+  # decoding settings file" race in the shim and returns exit 1 to the Azure
+  # control plane. The platform retries automatically (and succeeds), and the
+  # azuremonitoragent daemon ends up running normally -- but Terraform has
+  # already seen the first failure and aborts the apply with
+  # VMExtensionHandlerNonTransientError. Suppressing tolerates the transient
+  # first-enable failure; install / upgrade-time failures are still surfaced.
+  failure_suppression_enabled = true
 }
 
 # Block `terraform apply` until the in-VM bootstrap script declares success
@@ -136,7 +145,7 @@ resource "null_resource" "cyclecloud_ready" {
       for i in $(seq 1 90); do
         out=$(az vm run-command invoke -g "$RG" -n "$VM" \
                 --command-id RunShellScript \
-                --scripts "if [ -f /var/lib/cc-bootstrap.failed ]; then echo FAILED; tail -n 40 /var/log/cc-bootstrap.log 2>/dev/null || true; elif [ -f /var/lib/cc-bootstrap.done ]; then echo READY; else echo PENDING; fi" \
+                --scripts "if [ -f /var/lib/cc-bootstrap.failed ]; then echo FAILED; if [ -s /var/log/cc-bootstrap.log ]; then tail -n 40 /var/log/cc-bootstrap.log; else echo '(cc-bootstrap.log empty/missing -- failure happened before cc-bootstrap.sh ran; tailing cloud-init-output.log)'; tail -n 60 /var/log/cloud-init-output.log 2>/dev/null || true; fi; elif [ -f /var/lib/cc-bootstrap.done ]; then echo READY; else echo PENDING; fi" \
                 --query 'value[0].message' -o tsv 2>/dev/null || echo PENDING)
         if echo "$out" | grep -q READY; then
           echo "[cyclecloud_ready] CycleCloud bootstrap complete after $((i * 20))s."

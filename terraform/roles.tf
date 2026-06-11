@@ -121,3 +121,16 @@ resource "azurerm_role_assignment" "cyclecloud_locker_blob" {
   scope                = azurerm_storage_account.locker.id
   role_definition_name = "Storage Blob Data Contributor"
 }
+
+# CycleCloud's "Edit Locker" UI filters the Locker Identity dropdown to MIs
+# that hold a blob-read RBAC assignment scoped to the locker SA itself --
+# subscription-scope inheritance via the custom orchestrator role is not
+# enough. Without this, `cyclecloud account create` silently drops the
+# LockerIdentity field, the dropdown shows empty, and cluster nodes can't
+# pull cluster-init / projects from the locker over the private endpoint
+# (shared_access_key_enabled = false makes MI auth the only option).
+resource "azurerm_role_assignment" "uai_locker_blob_reader" {
+  principal_id         = azurerm_user_assigned_identity.cyclecloud.principal_id
+  scope                = azurerm_storage_account.locker.id
+  role_definition_name = "Storage Blob Data Reader"
+}

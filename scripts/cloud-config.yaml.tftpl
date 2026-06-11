@@ -81,38 +81,67 @@ write_files:
 
 runcmd:
   # ----- Base install: Java 8 + Azure CLI + CycleCloud -----------------------
-  - update-alternatives --set java /usr/lib/jvm/java-8-openjdk-amd64/jre/bin/java
-
-  - install -d -m 0755 /etc/apt/keyrings
-  - curl -fsSL https://packages.microsoft.com/keys/microsoft.asc | gpg --dearmor -o /etc/apt/keyrings/microsoft.gpg
-  - chmod go+r /etc/apt/keyrings/microsoft.gpg
-
+  # cloud-init runs runcmd under /bin/sh (dash on Ubuntu), which does NOT
+  # support `set -o pipefail` or `trap ... ERR`. We need both for a robust
+  # fail-fast, so we hand the whole prerequisite block off to bash via a
+  # here-doc. The here-doc is single-quoted ('BASH_EOF') so the outer dash
+  # does no expansion -- bash sees the script verbatim.
+  #
+  # The trap writes /var/lib/cc-bootstrap.failed on ANY error so the
+  # Terraform poller surfaces a real failure instead of hanging.
   - |
-    AZ_DIST=$(lsb_release -cs)
-    cat <<EOF > /etc/apt/sources.list.d/azure-cli.sources
-    Types: deb
-    URIs: https://packages.microsoft.com/repos/azure-cli/
-    Suites: $${AZ_DIST}
-    Components: main
-    Architectures: $(dpkg --print-architecture)
-    Signed-by: /etc/apt/keyrings/microsoft.gpg
-    EOF
+    /bin/bash <<'BASH_EOF'
+    set -euo pipefail
+    mkdir -p /var/lib
+    on_err() {
+      rc=$?
+      echo "ERROR in cloud-init runcmd: '$BASH_COMMAND' (exit $rc)" >&2
+      touch /var/lib/cc-bootstrap.failed
+      exit $rc
+    }
+    trap on_err ERR
 
-  - echo "deb [signed-by=/etc/apt/keyrings/microsoft.gpg] https://packages.microsoft.com/repos/cyclecloud stable main" > /etc/apt/sources.list.d/cyclecloud.list
+    update-alternatives --set java /usr/lib/jvm/java-8-openjdk-amd64/jre/bin/java
 
-  - apt-get -qq update
-  - DEBIAN_FRONTEND=noninteractive apt-get -y install azure-cli cyclecloud8
+    # Azure CLI: Microsoft's official installer handles apt keyring + DEB822
+    # source setup internally and tracks supported Ubuntu codenames upstream.
+    # It also installs /etc/apt/keyrings/microsoft.gpg as a side-effect.
+    curl -sL https://aka.ms/InstallAzureCLIDeb | bash
+    command -v az >/dev/null
 
-  # ----- Wait for the cycle_server service to be live ------------------------
-  - /opt/cycle_server/cycle_server await_startup
+    # CycleCloud apt source. The microsoft.gpg keyring already exists from the
+    # azure-cli installer above, so `gpg --dearmor` needs `--yes` to avoid
+    # prompting on /dev/tty (cloud-init has no TTY -> hang/fail).
+    install -d -m 0755 /etc/apt/keyrings
+    curl -fsSL https://packages.microsoft.com/keys/microsoft.asc \
+      | gpg --dearmor --yes -o /etc/apt/keyrings/microsoft.gpg
+    chmod go+r /etc/apt/keyrings/microsoft.gpg
+    echo "deb [signed-by=/etc/apt/keyrings/microsoft.gpg] https://packages.microsoft.com/repos/cyclecloud stable main" \
+      > /etc/apt/sources.list.d/cyclecloud.list
 
-  # ----- Install the bundled CycleCloud CLI ----------------------------------
-  - unzip -o /opt/cycle_server/tools/cyclecloud-cli.zip -d /tmp/cyclecloud
-  - python3 /tmp/cyclecloud/cyclecloud-cli-installer/install.py -y --system --installdir /opt/cycle_server/.cycle
+    apt-get -qq update
+    DEBIAN_FRONTEND=noninteractive apt-get -y install cyclecloud8
+
+    /opt/cycle_server/cycle_server await_startup
+
+    unzip -o /opt/cycle_server/tools/cyclecloud-cli.zip -d /tmp/cyclecloud
+    python3 /tmp/cyclecloud/cyclecloud-cli-installer/install.py \
+      -y --system --installdir /opt/cycle_server/.cycle
+    BASH_EOF
 
   # ----- Bootstrap: admin user, CLI init, subscription registration ----------
   # The script is idempotent and writes /var/lib/cc-bootstrap.{done,failed}
   # plus a full transcript at /var/log/cc-bootstrap.log. The Terraform
   # null_resource `cyclecloud_ready` polls for the sentinel before declaring
-  # the apply complete.
-  - /usr/local/sbin/cc-bootstrap.sh
+  # the apply complete. If the prerequisite block above failed, the sentinel
+  # is already there and this script's idempotency guard will be moot --
+  # but we still gate on it via `[ -f .failed ] && exit 0` so we don't
+  # double-report.
+  - |
+    /bin/bash <<'BASH_EOF'
+    if [ -f /var/lib/cc-bootstrap.failed ]; then
+      echo "skipping cc-bootstrap.sh: prerequisite step already failed" >&2
+      exit 0
+    fi
+    exec /usr/local/sbin/cc-bootstrap.sh
+    BASH_EOF
