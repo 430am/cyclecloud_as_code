@@ -59,6 +59,11 @@ log "starting cc-bootstrap (admin_user=$ADMIN_USER, kv=$KV_NAME)"
 
 # -------- Stage 1: pull secrets from Key Vault -------------------------------
 log "stage 1: az login --identity + Key Vault fetch"
+if ! command -v az >/dev/null 2>&1; then
+  log "ERROR: 'az' not on PATH -- azure-cli failed to install during cloud-init."
+  log "       inspect /var/log/cloud-init-output.log on the VM for the apt failure."
+  exit 1
+fi
 az login --identity --allow-no-subscriptions >/dev/null
 
 CCPASSWORD=$(az keyvault secret show --vault-name "$KV_NAME" \
