@@ -46,6 +46,17 @@ mock_provider "azuread" {
       object_id           = "00000000-0000-0000-0000-000000000002"
     }
   }
+
+  # Required by terraform/entra.tf when entra_auth_enabled = true. The
+  # entra runs below pin the Microsoft Graph service principal lookup
+  # (client_id = 00000003-0000-0000-c000-000000000000).
+  mock_data "azuread_service_principal" {
+    defaults = {
+      client_id    = "00000003-0000-0000-c000-000000000000"
+      object_id    = "00000000-0000-0000-0000-00000000abcd"
+      display_name = "Microsoft Graph"
+    }
+  }
 }
 
 mock_provider "http" {
@@ -194,4 +205,125 @@ run "naming_token_compact_strips_hyphens" {
     condition     = length(output.naming_tokens.naming_token_compact) <= 20
     error_message = "naming_token_compact exceeded the 20-char ceiling implied by the application_name validator"
   }
+}
+
+# ---------------------------------------------------------------------------
+# 5. Entra OFF (default): all entra_* outputs are null/empty and no AAD
+#    resources are planned. This is the "no regression" guard -- the
+#    module must remain provider-agnostic when SSO is not requested.
+# ---------------------------------------------------------------------------
+run "entra_disabled_by_default_produces_no_aad_outputs" {
+  command = plan
+
+  variables {
+    # entra_auth_enabled defaults to false; assert that nothing leaks.
+  }
+
+  assert {
+    condition     = output.entra_auth_enabled == false
+    error_message = "entra_auth_enabled should default to false"
+  }
+
+  assert {
+    condition = (
+      output.entra_tenant_id == null &&
+      output.entra_client_id == null &&
+      output.entra_application_object_id == null &&
+      output.entra_service_principal_object_id == null &&
+      output.entra_redirect_uris == null &&
+      output.entra_next_steps == null
+    )
+    error_message = "All entra_* outputs must be null when entra_auth_enabled = false"
+  }
+
+  assert {
+    condition     = length(output.entra_app_role_ids) == 0
+    error_message = "entra_app_role_ids must be empty when entra_auth_enabled = false"
+  }
+}
+
+# ---------------------------------------------------------------------------
+# 6. Entra ON: outputs are populated, role IDs are deterministic UUIDs
+#    derived from the app display name, and the SPA redirect URIs reflect
+#    the operator-supplied hostnames. ondemand=false here -- the two
+#    Global.Node.* roles get null IDs (uuidv5 is still computed for the
+#    map; we only assert the three always-on roles are stable).
+# ---------------------------------------------------------------------------
+run "entra_enabled_populates_outputs_and_redirect_uris" {
+  command = plan
+
+  variables {
+    entra_auth_enabled         = true
+    entra_app_display_name     = "cctest-cyclecloud"
+    entra_cyclecloud_hostnames = ["cc.example.com", "cc-alt.example.com"]
+  }
+
+  assert {
+    condition     = output.entra_auth_enabled == true
+    error_message = "entra_auth_enabled output should reflect the input variable"
+  }
+
+  assert {
+    condition     = output.entra_tenant_id == "00000000-0000-0000-0000-000000000003"
+    error_message = "entra_tenant_id should be the deployer tenant id"
+  }
+
+  assert {
+    condition = (
+      contains(keys(output.entra_app_role_ids), "Administrator") &&
+      contains(keys(output.entra_app_role_ids), "SuperUser") &&
+      contains(keys(output.entra_app_role_ids), "User")
+    )
+    error_message = "entra_app_role_ids must include the three base CycleCloud roles"
+  }
+
+  # uuidv5("dns", "superuser.cctest-cyclecloud") is deterministic. Drift
+  # in this value means the role IDs would rotate on every apply, which
+  # would re-issue assignments and break the user experience.
+  assert {
+    condition     = output.entra_app_role_ids["SuperUser"] == uuidv5("dns", "superuser.cctest-cyclecloud")
+    error_message = "SuperUser role ID must be a stable uuidv5 derived from the app display name"
+  }
+
+  assert {
+    condition = (
+      contains(output.entra_redirect_uris.public_client, "http://localhost") &&
+      contains(output.entra_redirect_uris.public_client, "https://localhost")
+    )
+    error_message = "public_client redirect URIs must always include http://localhost and https://localhost"
+  }
+
+  assert {
+    condition = (
+      contains(output.entra_redirect_uris.single_page_application, "https://cc.example.com/home") &&
+      contains(output.entra_redirect_uris.single_page_application, "https://cc.example.com/sso") &&
+      contains(output.entra_redirect_uris.single_page_application, "https://cc-alt.example.com/home") &&
+      contains(output.entra_redirect_uris.single_page_application, "https://cc-alt.example.com/sso")
+    )
+    error_message = "SPA redirect URIs must expand each hostname into /home + /sso entries"
+  }
+
+  assert {
+    condition     = length(output.entra_redirect_uris.single_page_application) == 4
+    error_message = "Two hostnames must produce exactly four SPA redirect URIs (2 hosts x 2 paths)"
+  }
+}
+
+# ---------------------------------------------------------------------------
+# 7. Open OnDemand without entra_ondemand_mi_principal_id must fail at
+#    plan time -- catches the most common misconfiguration before it
+#    reaches the Graph API.
+# ---------------------------------------------------------------------------
+run "entra_ondemand_without_principal_id_fails" {
+  command = plan
+
+  variables {
+    entra_auth_enabled    = true
+    entra_enable_ondemand = true
+    # entra_ondemand_mi_principal_id intentionally omitted
+  }
+
+  expect_failures = [
+    azuread_application_federated_identity_credential.ondemand,
+  ]
 }

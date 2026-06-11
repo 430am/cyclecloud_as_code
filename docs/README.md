@@ -13,6 +13,7 @@ five-line quickstart; deeper how-tos and reference material live here.
 | [variables.md](variables.md) | Reference for every input variable and the naming convention applied to each resource |
 | [post-deploy.md](post-deploy.md) | What the cloud-init bootstrap does, how to verify it finished, and how to log into the CycleCloud web UI |
 | [testing.md](testing.md) | How tests are organized (static checks, `terraform test`, planned E2E) and how to run them locally |
+| [entra-auth.md](entra-auth.md) | Opt-in Microsoft Entra ID app registration for CycleCloud SSO — what gets created, what's deferred, and the variables to set |
 | [known-gaps.md](known-gaps.md) | Intentional rough edges and TODOs (KV firewall posture, cluster automation, NSG coverage, etc.) |
 
 ## Conventions used in these docs

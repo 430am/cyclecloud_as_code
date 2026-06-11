@@ -125,3 +125,72 @@ output "naming_tokens" {
     naming_token_compact = local.naming_token_compact
   }
 }
+
+# ---------------------------------------------------------------------------
+# Entra ID outputs. All null when entra_auth_enabled = false. Used by the
+# operator to copy values into the CycleCloud UI's Auth Settings (or into
+# the follow-up server-side bootstrap automation).
+# ---------------------------------------------------------------------------
+
+output "entra_auth_enabled" {
+  description = "Whether the Entra ID app registration was created."
+  value       = var.entra_auth_enabled
+}
+
+output "entra_tenant_id" {
+  description = "Tenant ID of the directory hosting the CycleCloud app registration. Null when entra_auth_enabled = false."
+  value       = var.entra_auth_enabled ? data.azurerm_client_config.current.tenant_id : null
+}
+
+output "entra_client_id" {
+  description = "Application (client) ID of the CycleCloud Entra app registration. Null when entra_auth_enabled = false."
+  value       = var.entra_auth_enabled ? azuread_application.cyclecloud[0].client_id : null
+}
+
+output "entra_application_object_id" {
+  description = "Directory object ID of the CycleCloud Entra app registration. Null when entra_auth_enabled = false."
+  value       = var.entra_auth_enabled ? azuread_application.cyclecloud[0].object_id : null
+}
+
+output "entra_service_principal_object_id" {
+  description = "Object ID of the CycleCloud Entra service principal (use this when assigning additional app roles via Graph / az ad). Null when entra_auth_enabled = false."
+  value       = var.entra_auth_enabled ? azuread_service_principal.cyclecloud[0].object_id : null
+}
+
+output "entra_app_role_ids" {
+  description = "Map of app-role value -> role GUID for the CycleCloud Entra app registration. Empty when entra_auth_enabled = false."
+  value = var.entra_auth_enabled ? {
+    Administrator     = local.entra_role_ids.Administrator
+    SuperUser         = local.entra_role_ids.SuperUser
+    User              = local.entra_role_ids.User
+    Global_Node_User  = local.entra_role_ids.Global_Node_User
+    Global_Node_Admin = local.entra_role_ids.Global_Node_Admin
+  } : {}
+}
+
+output "entra_redirect_uris" {
+  description = "Effective redirect URIs configured on the Entra app registration (public client + single-page application)."
+  value = var.entra_auth_enabled ? {
+    public_client           = ["http://localhost", "https://localhost"]
+    single_page_application = local.entra_spa_redirect_uris
+  } : null
+}
+
+# Convenience: operator-facing next-steps after a successful apply with
+# entra_auth_enabled = true. Renders nothing when disabled.
+output "entra_next_steps" {
+  description = "Manual server-side configuration steps to wire CycleCloud to the new app registration. See docs/entra-auth.md."
+  value = var.entra_auth_enabled ? join("\n", [
+    "1. SSH (or `az vm run-command invoke`) to the CycleCloud VM.",
+    "2. Edit /opt/cycle_server/config/cycle_server.properties and set:",
+    "     webServerEnableTenancy=true",
+    "     webServerEnableAzureAuth=true",
+    "     webServerAzureAuthTenantId=${data.azurerm_client_config.current.tenant_id}",
+    "     webServerAzureAuthClientId=${azuread_application.cyclecloud[0].client_id}",
+    "3. Restart cycle_server:  sudo systemctl restart cycle_server",
+    "4. (Optional) Assign additional Entra users/groups to the desired app role:",
+    "     az ad app-role assignment create --app-role-id <role_id> \\",
+    "       --principal-id <user_or_group_object_id> \\",
+    "       --resource-id ${azuread_service_principal.cyclecloud[0].object_id}",
+  ]) : null
+}
