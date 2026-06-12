@@ -30,7 +30,36 @@ pre-opened for when you do enable TLS).
 
 ## Option A: Bastion (`access_mode = "bastion"`)
 
-Use Bastion + Azure CLI tunneling (Standard SKU, `tunneling_enabled = true`):
+The Bastion host is Standard SKU with `tunneling_enabled = true`
+([terraform/bastion.tf](../terraform/bastion.tf)). There are two ways to
+open the web UI:
+
+### A1. Multiplexed connect (recommended)
+
+Use the helper script [post-config/bastionConnect.sh](../post-config/bastionConnect.sh).
+It opens a Bastion tunnel to **SSH (port 22)** and then runs a local
+`ssh -L 8080:localhost:8080` over it. All browser sockets multiplex over
+the single SSH connection, which is materially faster than forwarding
+8080 directly through Bastion (where each new TCP connection costs a
+fresh WebSocket setup):
+
+```bash
+cd post-config
+./downloadSSH.sh        # once per deploy; pulls the key from Key Vault
+./bastionConnect.sh     # leave running; Ctrl-C to disconnect
+```
+
+Then browse to <http://localhost:8080> and sign in (see
+[post-deploy.md](post-deploy.md#logging-into-the-web-ui) for the
+credentials). The browser-to-Bastion hop is HTTPS (Bastion's own TLS);
+only the inside of the tunnel is plaintext HTTP.
+
+If the script exits silently or the tunnel feels slow, see
+[troubleshooting.md](troubleshooting.md#bastion-web-tunnel-feels-slow--laggy).
+
+### A2. Single-layer tunnel (simpler, slower)
+
+If you don't need the SSH key on disk and don't mind the latency:
 
 ```bash
 cd terraform
@@ -45,11 +74,6 @@ az network bastion tunnel \
   --target-resource-id "$VM_ID" \
   --resource-port 8080 --port 8080
 ```
-
-Then browse to <http://localhost:8080> and sign in (see
-[post-deploy.md](post-deploy.md#logging-into-the-web-ui) for the credentials).
-The browser-to-Bastion hop is HTTPS (Bastion's own TLS); only the
-Bastion-to-VM hop inside the tunnel is plaintext HTTP.
 
 For SSH over Bastion, see [ssh-key.md](ssh-key.md#2c-ssh-over-azure-bastion-tunneling).
 

@@ -85,10 +85,10 @@ credentials. The subscription should already be listed under
 **Settings → Subscriptions** — if it is, the bootstrap finished cleanly and
 you can go straight to creating a cluster.
 
-> If `Settings → Subscriptions` is empty, the `cyclecloud account create`
-> step failed (usually a transient RBAC propagation race). Inspect
-> `/var/log/cc-bootstrap.log` on the VM, then re-run the whole bootstrap:
-> `sudo rm -f /var/lib/cc-bootstrap.{done,failed} && sudo /usr/local/sbin/cc-bootstrap.sh`.
+If the page hangs after sign-in, the UI feels laggy through Bastion, the
+subscription list is empty, or `terraform apply` hung on
+`null_resource.cyclecloud_ready`, see
+[troubleshooting.md](troubleshooting.md).
 
 ## Mounting the NFS shares (sched + shared)
 

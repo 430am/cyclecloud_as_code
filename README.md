@@ -240,4 +240,5 @@ In-depth operator documentation lives in [docs/](docs/README.md):
 - [Variables](docs/variables.md) — every input variable + the naming convention.
 - [Post-deploy](docs/post-deploy.md) — what the cloud-init bootstrap does, how to verify it, how to log in.
 - [Testing](docs/testing.md) — static checks, `terraform test`, and the planned end-to-end deploy suite.
+- [Troubleshooting](docs/troubleshooting.md) — symptoms we've actually hit (UI hangs after login, Bastion tunnel lag, silent script exits, bootstrap failures, NFS mount issues) and the fixes that worked.
 - [Known gaps / TODO](docs/known-gaps.md) — intentional rough edges (KV firewall, cluster automation, NSG coverage, etc.).

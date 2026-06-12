@@ -14,6 +14,7 @@ five-line quickstart; deeper how-tos and reference material live here.
 | [post-deploy.md](post-deploy.md) | What the cloud-init bootstrap does, how to verify it finished, and how to log into the CycleCloud web UI |
 | [testing.md](testing.md) | How tests are organized (static checks, `terraform test`, planned E2E) and how to run them locally |
 | [entra-auth.md](entra-auth.md) | Opt-in Microsoft Entra ID app registration for CycleCloud SSO — what gets created, what's deferred, and the variables to set |
+| [troubleshooting.md](troubleshooting.md) | Symptoms we've actually hit and the fixes that worked — UI hangs after login, Bastion tunnel lag, `bastionConnect.sh` exiting silently, bootstrap failures, NFS mount issues |
 | [known-gaps.md](known-gaps.md) | Intentional rough edges and TODOs (KV firewall posture, cluster automation, NSG coverage, etc.) |
 
 ## Conventions used in these docs
