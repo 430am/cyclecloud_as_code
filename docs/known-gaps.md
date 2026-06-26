@@ -31,6 +31,24 @@ back to `Deny` re-enables the IP allow-list.
 needs egress to `api.ipify.org` for the auto-detection, or a static
 service-principal-IP allow list).
 
+## Key Vault private endpoint vs Terraform refresh
+
+The `azurerm_key_vault` resource does a Key Vault **data-plane** read for
+certificate contacts during refresh. If the vault FQDN resolves to a private
+endpoint IP that the Terraform runner cannot actually reach, `plan` / `apply`
+fail with:
+
+`retrieving contact for KeyVault: keyvault.BaseClient#GetCertificateContacts: ... context deadline exceeded`
+
+To keep local workstations and generic CI runners reliable, this repo leaves
+the Key Vault private endpoint **disabled by default** via
+`var.enable_key_vault_private_endpoint = false`.
+
+Enable it only when the runner has a working route and DNS story for the vault
+private endpoint. If you do need the PE from a peered or separate network,
+make sure your private DNS setup supports fallback to the public endpoint when
+the private record is not reachable.
+
 ## `data.http.current_ip` requires outbound HTTPS to api.ipify.org
 
 Called on every plan / apply / destroy. Air-gapped or restricted-egress

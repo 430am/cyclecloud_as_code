@@ -86,3 +86,17 @@ variable "access_mode" {
     error_message = "access_mode must be either \"bastion\" or \"public_ip\"."
   }
 }
+
+variable "enable_key_vault_private_endpoint" {
+  description = <<-EOT
+    Whether to create the Key Vault private endpoint.
+
+    Leave this `false` by default unless the machine running Terraform can
+    resolve and reach the vault's private endpoint. The azurerm provider reads
+    Key Vault certificate contacts from the data plane during refresh, so a
+    private-only DNS path that the runner cannot reach causes `terraform plan`
+    and `apply` to fail with `GetCertificateContacts` timeouts.
+  EOT
+  type        = bool
+  default     = false
+}

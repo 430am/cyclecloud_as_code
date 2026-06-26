@@ -189,15 +189,19 @@ flowchart LR
   Bastion public IP → tunneled SSH/HTTPS to the VM's private IP; no public
   IP on the VM).
 - **Private endpoints** in the `private_endpoint` subnet are how the VM
-  reaches Key Vault, the locker storage account, the monitoring storage
-  account, and Azure Monitor. Both storage accounts have `public_network_
-  access_enabled = false`, so they're reachable **only** via their PEs.
-  The Key Vault is **currently** configured with `network_acls.default_
-  action = "Allow"` (see [docs/known-gaps.md](docs/known-gaps.md#key-vault-firewall)) — the
-  `allowed_source_ips` list (configured + auto-detected operator IP) is
-  computed and assigned but not enforcing while default-Allow is in effect.
-  Private DNS zones are VNet-linked so the storage / KV FQDNs resolve to
-  the PE NICs from inside the VNet.
+    reaches the locker storage account, the monitoring storage account, and Azure
+    Monitor. Both storage accounts have `public_network_access_enabled = false`,
+    so they're reachable **only** via their PEs. The Key Vault private endpoint
+    is optional and **disabled by default** because the azurerm provider refreshes
+    the vault through the data plane; if the Terraform runner resolves the vault
+    to an unreachable private IP, plan/apply fails on `GetCertificateContacts`
+    timeouts (see [docs/known-gaps.md](docs/known-gaps.md#key-vault-private-endpoint-vs-terraform-refresh)).
+    The Key Vault itself is **currently** configured with
+    `network_acls.default_action = "Allow"` (see [docs/known-gaps.md](docs/known-gaps.md#key-vault-firewall))
+    so the `allowed_source_ips` list (configured + auto-detected operator IP) is
+    computed and assigned but not enforcing while default-Allow is in effect.
+    Private DNS zones are VNet-linked so the storage FQDNs, and optionally the
+    Key Vault private-link FQDN, resolve to the PE NICs from inside the VNet.
 - **NAT Gateway** provides deterministic egress for the `cluster` and
   `server` subnets — required so package installs (`apt`, `cyclecloud8`,
   Azure CLI) and any future cluster nodes have outbound Internet without

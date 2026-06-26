@@ -66,6 +66,8 @@ resource "azurerm_private_endpoint" "ampls" {
 }
 
 resource "azurerm_private_endpoint" "key_vault" {
+  count = var.enable_key_vault_private_endpoint ? 1 : 0
+
   location            = var.location
   name                = "${local.naming_token}-pe-kv"
   resource_group_name = azurerm_resource_group.testing.name
